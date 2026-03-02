@@ -747,7 +747,7 @@ def parse_arguments():
     parser.add_argument(
         "--concurrency",
         type=int,
-        default=10,
+        default=3,
         help="Maximum concurrent API requests (default: 10, recommended range: 10-30)",
     )
 

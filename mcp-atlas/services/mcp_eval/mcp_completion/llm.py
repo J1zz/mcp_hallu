@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 import litellm
 from pydantic import BaseModel
+from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 
 from .schema import Message, ToolCallSchema, AssistantMessage
 from .config import config
@@ -51,6 +52,27 @@ def strip_all_additional_properties(schema: any) -> any:
     return schema
 
 
+def _is_rate_limit_error(exception: Exception) -> bool:
+    """Check if the exception is a rate limit error."""
+    error_str = str(exception).lower()
+    return (
+        isinstance(exception, litellm.RateLimitError)
+        or "rate limit" in error_str
+        or "too many requests" in error_str
+        or "429" in error_str
+    )
+
+
+@retry(
+    retry=retry_if_exception_type(Exception),
+    wait=wait_exponential(multiplier=1, min=5, max=60),
+    stop=stop_after_attempt(5),
+    reraise=True,
+    before_sleep=lambda retry_state: logger.warning(
+        f"Rate limit hit, retrying in {retry_state.next_action.sleep:.0f}s "
+        f"(attempt {retry_state.attempt_number}/5)..."
+    ),
+)
 async def create_completion(
     model: str,
     messages: List[Message],

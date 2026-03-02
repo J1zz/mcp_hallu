@@ -59,7 +59,7 @@ class EvaluatorConfig:
 
     evaluator_model: str
     semaphore_limit: int
-    request_delay: float = 0.2
+    request_delay: float = 1.0
     verbose: bool = True
     save_partial_on_error: bool = True
     strict_evaluation: bool = True
@@ -348,9 +348,13 @@ class AsyncLiteLLMClient(AsyncLLMClient):
             litellm.api_base = api_base
 
     @retry(
-        wait=wait_random_exponential(min=1, max=60),
+        wait=wait_random_exponential(min=60, max=120),
         stop=stop_after_attempt(6),
         reraise=True,
+        before_sleep=lambda retry_state: logging.getLogger(__name__).warning(
+            f"Request failed, retrying in {retry_state.next_action.sleep:.0f}s "
+            f"(attempt {retry_state.attempt_number}/6): {retry_state.outcome.exception()}"
+        ),
     )
     async def generate_structured_content(
         self, prompt: str, response_schema: Dict, temperature: float = 0.0
@@ -370,8 +374,8 @@ class AsyncLiteLLMClient(AsyncLLMClient):
                         "response_schema": response_schema,
                     },
                     temperature=(
-                        1 if self.config.evaluator_model == "gpt-5" else temperature
-                    ),  # gpt-5 only supports temperature=1
+                        1 if "gpt-5" in self.config.evaluator_model else temperature
+                    ),  # gpt-5 series only supports temperature=1
                     api_key=litellm.api_key,
                     api_base=(
                         litellm.api_base
@@ -380,7 +384,7 @@ class AsyncLiteLLMClient(AsyncLLMClient):
                     ),
                 )
 
-                # Rate limiting delay
+                # Rate limiting delay between successful requests
                 await asyncio.sleep(self.config.request_delay)
 
                 # Parse JSON response
@@ -825,8 +829,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--concurrency",
         type=int,
-        default=5,
-        help="Number of concurrent requests to the LLM API.",
+        default=1,
+        help="Number of concurrent requests to the LLM API (default: 2, lower values reduce rate limit errors).",
     )
     parser.add_argument(
         "--num-tasks",
