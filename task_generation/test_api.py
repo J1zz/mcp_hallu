@@ -12,7 +12,7 @@ client = OpenAI(
 
 # 段式调用
 result = client.chat.completions.create(
-    model="gpt-4o",
+    model="gpt-5.1",
     messages=[
         {
             "role": "user",

@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hallu-eval"
+version = "0.1.0"
+description = "幻觉类型感知的 MCP Agent 评测工具集"
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    "pandas>=2.0.3",
+    "python-dotenv>=1.0.0",
+    "litellm>=1.75.0",
+    "tenacity>=8.0.0",
+    "tqdm>=4.64.0",
+    "aiohttp>=3.10.11",
+    "aiofiles>=24.1.0",
+    "aiocsv>=1.3.2",
+    "numpy>=1.24.0",
+    "nest-asyncio>=1.5.0",
+    "datasets>=2.14.0",
+    "httpx>=0.28.0",
+    "requests>=2.28.0",
+    "openai>=1.30.0",
+]
+
+# ── CLI 入口点 ──────────────────────────────────────────────────────────────
+# uv run hallu-eval   → hallu_eval.py  (幻觉评测主流程)
+# uv run hallu-gt     → run_gt_execution.py (预跑 GT 执行日志)
+[project.scripts]
+hallu-eval = "hallu_eval:main"
+hallu-gt   = "run_gt_execution:main"
+
+[tool.hatch.build.targets.wheel]
+# 将当前目录下的两个独立脚本视为顶层模块
+packages = ["."]
+# 只打包这两个文件，忽略 tasks/ prompts/ 等数据目录
+include = ["hallu_eval.py", "run_gt_execution.py"]
+
+[dependency-groups]
+dev = [
+    "black>=24.8.0",
+]

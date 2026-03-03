@@ -153,37 +153,58 @@ Before generating, verify:
     - 函数内部使用 `from mcp_client import call_tool` 调用真实 MCP 工具
     - 函数必须**返回一个字符串**，包含所有执行记录和结果（用于后续传给 LLM 生成 reference answer）
     - 返回的字符串必须包含：每个工具调用的记录、提取的信号、如何使用提取的信息、最终结果
+    - **⚠️ 调用格式（CRITICAL）**：
+      - `call_tool` 必须使用**两参数**格式：`call_tool("完整工具名", {参数dict})`
+      - 完整工具名 = `available_tools` 列表中的名称（如 `"osm-mcp-server_geocode_address"`）
+      - ❌ 禁止三参数写法：`call_tool('server', 'tool', args)`
+      - ✅ 正确写法：`call_tool('osm-mcp-server_geocode_address', {'address': 'Empire State Building'})`
+    - **⚠️ 字段访问（CRITICAL）**：
+      - ❌ 禁止直接索引：`data['field']`（字段不存在时会 KeyError 崩溃）
+      - ✅ 必须防御性访问：`data.get('field', default_value)`
+      - 嵌套字段：`data.get('a', {}).get('b', {}).get('c')`
+      - 每个工具调用后必须先 log 原始返回前 200 字符，方便调试：
+        `execution_log.append(f"[RAW] {str(raw_result)[:200]}")`
     - 函数格式示例：
       ```python
       def generate_reference_answer():
           import json
           from mcp_client import call_tool
-          
+
           execution_log = []
-          
-          # 长链工具调用
-          execution_log.append("Step 1: Calling tool 'server_a.tool_a' with params {...}")
-          step1_res = call_tool('server_a', 'tool_a', {...})
-          step1_data = json.loads(step1_res) if isinstance(step1_res, str) else step1_res
-          execution_log.append(f"Result (500+ items): {json.dumps(step1_data[:5], indent=2)}... [truncated]")
-          
-          # 提取信号
+
+          # ✅ 正确调用格式：call_tool("完整工具名", {参数dict})
+          # 完整工具名来自 available_tools 列表
+          execution_log.append("Step 1: Calling tool 'server_a_tool_a'")
+          raw1 = call_tool('server_a_tool_a', {'param1': 'value1'})
+          execution_log.append(f"[RAW] {str(raw1)[:200]}")
+          step1_data = json.loads(raw1) if isinstance(raw1, str) else raw1
+          execution_log.append(f"Result sample: {str(step1_data)[:300]}... [truncated]")
+
+          # 提取信号（防御性访问，不假设字段一定存在）
           execution_log.append("Step 2: Extracting signal from noisy output...")
-          signal = extract_signal(step1_data, criteria)
+          items = step1_data.get('items', step1_data if isinstance(step1_data, list) else [])
+          signal = items[0].get('id', 'unknown') if items else 'unknown'
           execution_log.append(f"Extracted signal: {signal}")
-          
+
           # 更多工具调用
-          execution_log.append("Step 3: Calling tool 'server_b.tool_b' with params {...}")
-          step3_res = call_tool('server_b', 'tool_b', {...})
-          # ... 更多步骤 ...
-          
+          execution_log.append("Step 3: Calling tool 'server_b_tool_b'")
+          raw3 = call_tool('server_b_tool_b', {'input': signal})
+          step3_data = json.loads(raw3) if isinstance(raw3, str) else raw3
+          execution_log.append(f"Step 3 result: {str(step3_data)[:200]}")
+
           # 使用提取的信号
           execution_log.append(f"Step 5: Using extracted signal '{signal}' from step 2")
-          final_res = call_tool('server_c', 'tool_c', {'id': signal})
-          execution_log.append(f"Final result: {json.dumps(final_res, indent=2)}")
-          
+          raw_final = call_tool('server_c_tool_c', {'id': signal})
+          execution_log.append(f"Final result: {str(raw_final)[:300]}")
+
           return "\\n".join(execution_log)
       ```
+  - **CRITICAL - 防御性字段访问规范**：
+    - ❌ 禁止：`data['field']`（假设字段一定存在）
+    - ✅ 要求：`data.get('field', default_value)`（防御性访问）
+    - 对所有工具返回值必须用 `.get()` 或 `if key in data` 访问字段
+    - 遇到嵌套结构如 `data['a']['b']['c']` 必须改为 `data.get('a', {}).get('b', {}).get('c')`
+    - 每个工具调用后必须先 `execution_log.append(f"[RAW] {str(raw_result)[:200]}")` 打印原始返回
   - **state_assertions**: 必须是空数组 `[]`
 
 - **B. 有状态/操作类任务**
@@ -206,7 +227,7 @@ Generate a SINGLE JSON object strictly following this schema:
   // Only the tools actually needed for the task should be listed in evaluation_rules.required_tools
   "ground_truth": {
     "strategy": "dynamic_script",
-    "dynamic_reference_script": "def generate_reference_answer():\n    import json\n    from mcp_client import call_tool\n    \n    execution_log = []\n    \n    # 长链工具调用\n    execution_log.append(\"Step 1: Calling tool 'server_a.tool_a' with params {...}\")\n    step1_res = call_tool('server_a', 'tool_a', {...})\n    step1_data = json.loads(step1_res) if isinstance(step1_res, str) else step1_res\n    execution_log.append(f\"Result (500+ items): {json.dumps(step1_data[:5], indent=2)}... [truncated]\")\n    \n    # 提取信号\n    execution_log.append(\"Step 2: Extracting signal from noisy output...\")\n    signal = extract_signal(step1_data, criteria)\n    execution_log.append(f\"Extracted signal: {signal}\")\n    \n    # 更多工具调用\n    execution_log.append(\"Step 3: Calling tool 'server_b.tool_b' with params {...}\")\n    step3_res = call_tool('server_b', 'tool_b', {...})\n    # ... 更多步骤 ...\n    \n    # 使用提取的信号\n    execution_log.append(f\"Step 5: Using extracted signal '{signal}' from step 2\")\n    final_res = call_tool('server_c', 'tool_c', {'id': signal})\n    execution_log.append(f\"Final result: {json.dumps(final_res, indent=2)}\")\n    \n    return \"\\n\".join(execution_log)",
+    "dynamic_reference_script": "def generate_reference_answer():\n    import json\n    from mcp_client import call_tool\n\n    execution_log = []\n\n    # ✅ 调用格式：call_tool('完整工具名', {参数dict})，工具名来自 available_tools 列表\n    # ❌ 禁止三参数写法 call_tool('server', 'tool', args)\n    execution_log.append(\"Step 1: Calling tool 'server_a_tool_a'\")\n    raw1 = call_tool('server_a_tool_a', {'param1': 'value1'})\n    execution_log.append(f\"[RAW] {str(raw1)[:200]}\")\n    step1_data = json.loads(raw1) if isinstance(raw1, str) else raw1\n    execution_log.append(f\"Result sample: {str(step1_data)[:300]}... [truncated]\")\n\n    # 提取信号（防御性访问：用 .get() 不用 data['field']）\n    execution_log.append(\"Step 2: Extracting signal from noisy output...\")\n    items = step1_data.get('items', step1_data if isinstance(step1_data, list) else [])\n    signal = items[0].get('id', 'unknown') if items else 'unknown'\n    execution_log.append(f\"Extracted signal: {signal}\")\n\n    # 更多工具调用\n    execution_log.append(\"Step 3: Calling tool 'server_b_tool_b'\")\n    raw3 = call_tool('server_b_tool_b', {'input': signal})\n    step3_data = json.loads(raw3) if isinstance(raw3, str) else raw3\n    execution_log.append(f\"Step 3 result: {str(step3_data)[:200]}\")\n\n    # 使用提取的信号\n    execution_log.append(f\"Step 5: Using extracted signal '{signal}' from step 2\")\n    raw_final = call_tool('server_c_tool_c', {'id': signal})\n    execution_log.append(f\"Final result: {str(raw_final)[:300]}\")\n\n    return \"\\n\".join(execution_log)",
     "state_assertions": []
   },
   "evaluation_rules": {
@@ -271,4 +292,6 @@ Generate a SINGLE JSON object strictly following this schema:
 - [ ] `available_tools` includes ALL tools from all servers used (not just required tools)
 - [ ] Claims section shows signal extraction and usage
 - [ ] Ground truth script demonstrates long chain and memory
+- [ ] `dynamic_reference_script` 中所有 `call_tool` 均使用**两参数**格式：`call_tool("完整工具名", {参数dict})`，工具名来自 `available_tools` 列表，❌ 禁止 `call_tool('server', 'tool', args)` 三参数写法
+- [ ] `dynamic_reference_script` 中所有字段访问均使用 `.get()` 防御性写法，❌ 禁止 `data['field']` 直接索引
 
