@@ -89,24 +89,40 @@ import pandas as pd
 from dotenv import load_dotenv, find_dotenv
 
 # ─── 路径配置 ────────────────────────────────────────────────────────────────
-SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent.parent                       # mcp/ 根目录
-MCP_ATLAS_EVAL_DIR = REPO_ROOT / "mcp-atlas" / "services" / "mcp_eval"
+SCRIPT_DIR = Path(__file__).resolve().parent               # .../mcp_hallu/task_generation/
+MCP_HALLU_DIR = SCRIPT_DIR.parent                          # .../mcp_hallu/
+REPO_ROOT = MCP_HALLU_DIR.parent                           # .../mcp/
+MCP_ATLAS_DIR = MCP_HALLU_DIR / "mcp-atlas"                # .../mcp_hallu/mcp-atlas/
+MCP_ATLAS_EVAL_DIR = MCP_ATLAS_DIR / "services" / "mcp_eval"
 
 # 将 mcp_eval 加入 sys.path，方便复用 mcp_completion 内的工具
 # ⚠️ 必须在导入 mcp_evals_scores 之前完成
 if str(MCP_ATLAS_EVAL_DIR) not in sys.path:
     sys.path.insert(0, str(MCP_ATLAS_EVAL_DIR))
 
-# 加载 .env（从当前目录向上搜索）
-load_dotenv(find_dotenv())
+# 加载 .env：优先使用 mcp_hallu/mcp-atlas/.env（所有配置的权威来源）
+# find_dotenv() 从当前工作目录向上找，找不到侧支目录里的 .env，所以显式指定
+_dotenv_path = MCP_ATLAS_DIR / ".env"
+if _dotenv_path.exists():
+    load_dotenv(_dotenv_path, override=True)
+else:
+    load_dotenv(find_dotenv())  # fallback
 
 # ─── 可选：从 mcp_evals_scores.py 导入 LLM Judge 客户端 ─────────────────────
-# sys.path 和 .env 均已就绪，现在安全导入
+# sys.path 和 .env 均已就绪，现在安全导入。
+# mcp_evals_scores 顶层 import 了 matplotlib，而 task_generation venv 里没有装它。
+# 用 mock 临时占位，只影响本进程，不影响实际功能（LLM Judge 不依赖画图）。
 try:
+    import types as _types
+    import sys as _sys
+    _mpl_mock = _types.ModuleType("matplotlib")
+    _mpl_mock.pyplot = _types.ModuleType("matplotlib.pyplot")  # type: ignore
+    _sys.modules.setdefault("matplotlib", _mpl_mock)
+    _sys.modules.setdefault("matplotlib.pyplot", _mpl_mock.pyplot)  # type: ignore
+
     from mcp_evals_scores import AsyncLiteLLMClient as _AsyncLiteLLMClient, EvaluatorConfig as _EvaluatorConfig
     _EVALS_AVAILABLE = True
-except ImportError:
+except ImportError as _e:
     _AsyncLiteLLMClient = None  # type: ignore
     _EvaluatorConfig = None      # type: ignore
     _EVALS_AVAILABLE = False
@@ -559,26 +575,49 @@ def score_parallel_execution_sync(
                 "Respond ONLY with a JSON object: {\"score\": <float 0.0-1.0>, \"reason\": \"<brief explanation>\"}\n"
             )
             import asyncio as _asyncio
+            import litellm as _litellm
+
+            _eval_model = llm_client.config.evaluator_model
 
             async def _call_llm():
-                return await llm_client.generate_structured_content(
-                    prompt=llm_prompt,
-                    response_schema={
-                        "type": "object",
-                        "properties": {
-                            "score": {"type": "number"},
-                            "reason": {"type": "string"},
-                        },
-                        "required": ["score"],
-                    },
-                    temperature=0.0,
-                )
+                # generate_structured_content 内部写死了 response_schema，
+                # 该字段只有 Gemini 支持，OpenAI 会报 Unknown parameter。
+                # 直接调 litellm，根据模型类型选不同的 response_format。
+                _is_openai = any(_eval_model.startswith(p) for p in ("openai/", "gpt-", "o1", "o3", "o4"))
+                _is_gemini = "gemini" in _eval_model.lower()
 
-            # 在当前可能是同步上下文中安全执行异步调用
+                if _is_gemini:
+                    _resp_fmt = {
+                        "type": "json_object",
+                        "response_schema": {
+                            "type": "object",
+                            "properties": {
+                                "score": {"type": "number"},
+                                "reason": {"type": "string"},
+                            },
+                            "required": ["score"],
+                        },
+                    }
+                else:
+                    # OpenAI / 其他：只传 type，不传 response_schema
+                    _resp_fmt = {"type": "json_object"}
+
+                _temperature = 1 if "gpt-5" in _eval_model else 0.0
+                resp = await _litellm.acompletion(
+                    model=_eval_model,
+                    messages=[{"role": "user", "content": llm_prompt}],
+                    response_format=_resp_fmt,
+                    temperature=_temperature,
+                    api_key=_litellm.api_key,
+                    api_base=getattr(_litellm, "api_base", None) or None,
+                )
+                content = resp.choices[0].message.content or "{}"
+                return json.loads(content)
+
+            # 在同步上下文中安全执行异步调用
             try:
                 loop = _asyncio.get_event_loop()
                 if loop.is_running():
-                    # 已在事件循环中（如 Jupyter），用 nest_asyncio 或直接用 run_coroutine_threadsafe
                     import concurrent.futures
                     with concurrent.futures.ThreadPoolExecutor() as pool:
                         future = pool.submit(_asyncio.run, _call_llm())
@@ -1157,6 +1196,8 @@ async def run_full_pipeline(
         AsyncMCPTrajectoryGenerator = mcp_mod.AsyncMCPTrajectoryGenerator
 
         completion_csv = output_csv.replace(".csv", "_completion.csv")
+        # 每次重跑前删除旧的 completion CSV，避免追加写入导致数据叠加
+        Path(completion_csv).unlink(missing_ok=True)
         async with AsyncMCPTrajectoryGenerator(model) as generator:
             # 覆盖 SERVER_URL
             mcp_mod.SERVER_URL = server_url

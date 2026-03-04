@@ -408,6 +408,13 @@ class AsyncMCPTrajectoryGenerator:
                 "TRAJECTORY": row_data.get("TRAJECTORY", ""),
                 "GTFA_CLAIMS": row_data.get("GTFA_CLAIMS", ""),
                 "ENABLED_TOOLS": row_data.get("ENABLED_TOOLS", ""),
+                # Hallucination eval columns - pass through from input (may be absent in non-hallu datasets)
+                "HALLUCINATION_TYPE": row_data.get("HALLUCINATION_TYPE", ""),
+                "BUCKET": row_data.get("BUCKET", ""),
+                "DIFFICULTY": row_data.get("DIFFICULTY", ""),
+                "SHOULD_STOP_EARLY": row_data.get("SHOULD_STOP_EARLY", ""),
+                "EVALUATION_RULES": row_data.get("EVALUATION_RULES", ""),
+                "STATE_ASSERTIONS": row_data.get("STATE_ASSERTIONS", ""),
                 # Completion result columns (from script execution) - all lowercase
                 "script_model_response": result.script_model_response,
                 "raw_conversation_history": result.raw_conversation_history,
@@ -450,6 +457,13 @@ class AsyncMCPTrajectoryGenerator:
                 "TRAJECTORY": row_data.get("TRAJECTORY", ""),
                 "GTFA_CLAIMS": row_data.get("GTFA_CLAIMS", ""),
                 "ENABLED_TOOLS": row_data.get("ENABLED_TOOLS", ""),
+                # Hallucination eval columns - pass through from input
+                "HALLUCINATION_TYPE": row_data.get("HALLUCINATION_TYPE", ""),
+                "BUCKET": row_data.get("BUCKET", ""),
+                "DIFFICULTY": row_data.get("DIFFICULTY", ""),
+                "SHOULD_STOP_EARLY": row_data.get("SHOULD_STOP_EARLY", ""),
+                "EVALUATION_RULES": row_data.get("EVALUATION_RULES", ""),
+                "STATE_ASSERTIONS": row_data.get("STATE_ASSERTIONS", ""),
                 # Completion result columns (from script execution) - all lowercase
                 "script_model_response": f"ERROR: {str(e)}",
                 "raw_conversation_history": None,
