@@ -178,7 +178,7 @@ def generate_task_with_llm(prompt: str, client: OpenAI) -> dict | None:
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.7,
-                max_tokens=8192,
+                max_tokens=18192,
                 **_extra_kwargs,
             )
 

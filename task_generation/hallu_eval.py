@@ -94,11 +94,22 @@ REPO_ROOT = SCRIPT_DIR.parent.parent                       # mcp/ 根目录
 MCP_ATLAS_EVAL_DIR = REPO_ROOT / "mcp-atlas" / "services" / "mcp_eval"
 
 # 将 mcp_eval 加入 sys.path，方便复用 mcp_completion 内的工具
+# ⚠️ 必须在导入 mcp_evals_scores 之前完成
 if str(MCP_ATLAS_EVAL_DIR) not in sys.path:
     sys.path.insert(0, str(MCP_ATLAS_EVAL_DIR))
 
 # 加载 .env（从当前目录向上搜索）
 load_dotenv(find_dotenv())
+
+# ─── 可选：从 mcp_evals_scores.py 导入 LLM Judge 客户端 ─────────────────────
+# sys.path 和 .env 均已就绪，现在安全导入
+try:
+    from mcp_evals_scores import AsyncLiteLLMClient as _AsyncLiteLLMClient, EvaluatorConfig as _EvaluatorConfig
+    _EVALS_AVAILABLE = True
+except ImportError:
+    _AsyncLiteLLMClient = None  # type: ignore
+    _EvaluatorConfig = None      # type: ignore
+    _EVALS_AVAILABLE = False
 
 # ─── 日志 ────────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -512,8 +523,8 @@ def score_parallel_execution_sync(
     对比维度：
       1. tool_coverage  (0.0-1.0)：Agent 调用的工具是否覆盖了 required_tools
       2. semantic_match (0.0-1.0)：Agent 回复与 GT 执行日志的步骤顺序相似度
-         - 若无 LLM client，使用基于 claims 的关键词匹配作为轻量 fallback
-         - 若有 LLM client，使用 LLM 进行语义评分（与 mcp_evals_scores.py 的 CoverageEvaluator 一致）
+         - 若有 GT 日志且有 LLM client，使用 LLM 进行语义评分（主路径）
+         - 否则使用基于 claims 的关键词匹配作为轻量 fallback
       3. branch_correct (bool)：Reasoning 任务是否走了正确的分支（检查 branch_a/branch_b 关键词）
 
     最终得分：
@@ -530,28 +541,86 @@ def score_parallel_execution_sync(
     else:
         tool_coverage = 1.0
 
-    # ── 2) 语义匹配（基于 claims 的关键词 fallback）──────────────────────────
-    # 从 claims 提取步骤关键词，检验 Agent response 是否体现了这些步骤
-    claim_keywords = []
-    for c in task.claims:
-        if isinstance(c, dict):
-            desc = c.get("description", "")
-            # 取前 5 个英文词作为关键词
-            words = [w.strip(".,;:'\"()") for w in desc.split() if len(w) > 3]
-            claim_keywords.extend(words[:5])
+    # ── 2) 语义匹配 ────────────────────────────────────────────────────────────
+    gt_log = _safe_str(task.gt_execution_log)
+    semantic_match_method = "keyword_fallback"
 
-    if claim_keywords and agent_response:
-        response_lower = agent_response.lower()
-        matched = sum(1 for kw in claim_keywords if kw.lower() in response_lower)
-        semantic_match = min(1.0, matched / max(1, len(claim_keywords)))
+    # 主路径：有 GT 日志 + 有 LLM client → 调用 LLM 进行语义评分
+    if gt_log and llm_client is not None:
+        try:
+            llm_prompt = (
+                "You are an evaluator comparing an AI agent's execution against a ground-truth execution log.\n\n"
+                f"=== Ground Truth Execution Log ===\n{gt_log}\n\n"
+                f"=== Agent Response ===\n{agent_response or '(empty)'}\n\n"
+                f"=== Agent Tool Calls ===\n{json.dumps(agent_tool_calls)}\n\n"
+                "Task description: " + task.prompt + "\n\n"
+                "On a scale from 0.0 to 1.0, how semantically similar is the agent's execution to the ground truth?\n"
+                "Consider: correct tools used, correct order, correct parameters intent, correct final answer.\n"
+                "Respond ONLY with a JSON object: {\"score\": <float 0.0-1.0>, \"reason\": \"<brief explanation>\"}\n"
+            )
+            import asyncio as _asyncio
+
+            async def _call_llm():
+                return await llm_client.generate_structured_content(
+                    prompt=llm_prompt,
+                    response_schema={
+                        "type": "object",
+                        "properties": {
+                            "score": {"type": "number"},
+                            "reason": {"type": "string"},
+                        },
+                        "required": ["score"],
+                    },
+                    temperature=0.0,
+                )
+
+            # 在当前可能是同步上下文中安全执行异步调用
+            try:
+                loop = _asyncio.get_event_loop()
+                if loop.is_running():
+                    # 已在事件循环中（如 Jupyter），用 nest_asyncio 或直接用 run_coroutine_threadsafe
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as pool:
+                        future = pool.submit(_asyncio.run, _call_llm())
+                        llm_result = future.result(timeout=60)
+                else:
+                    llm_result = loop.run_until_complete(_call_llm())
+            except RuntimeError:
+                llm_result = _asyncio.run(_call_llm())
+
+            raw_score_val = llm_result.get("score", 0.5)
+            semantic_match = float(max(0.0, min(1.0, raw_score_val)))
+            semantic_match_method = "llm_judge"
+            llm_reason = llm_result.get("reason", "")
+            logger.info(f"  LLM Judge 语义评分: {semantic_match:.3f} | {llm_reason[:80]}")
+        except Exception as e:
+            logger.warning(f"  LLM Judge 调用失败，退化到关键词匹配: {e}")
+            semantic_match = None  # type: ignore
     else:
-        # 无法做语义匹配，给中性分
-        semantic_match = 0.5
+        semantic_match = None  # type: ignore
+
+    # Fallback：基于 claims 的关键词匹配
+    if semantic_match is None:
+        claim_keywords = []
+        for c in task.claims:
+            if isinstance(c, dict):
+                desc = c.get("description", "")
+                # 取前 5 个英文词作为关键词
+                words = [w.strip(".,;:'\"()") for w in desc.split() if len(w) > 3]
+                claim_keywords.extend(words[:5])
+
+        if claim_keywords and agent_response:
+            response_lower = agent_response.lower()
+            matched = sum(1 for kw in claim_keywords if kw.lower() in response_lower)
+            semantic_match = min(1.0, matched / max(1, len(claim_keywords)))
+        else:
+            # 无法做语义匹配，给中性分
+            semantic_match = 0.5
+        semantic_match_method = "keyword_fallback"
 
     # ── 3) 分支正确性（Reasoning Trap 专属） ────────────────────────────────
     branch_correct = False
     if task.hallucination_type == HallucinationType.REASONING:
-        gt_log = _safe_str(task.gt_execution_log)
         # 从 GT 日志中检测实际触发了哪个分支
         branch_triggered = None
         if "Branch A triggered" in gt_log or "branch_a" in gt_log.lower():
@@ -587,9 +656,10 @@ def score_parallel_execution_sync(
         "agent_used_required": [t for t in required_tools if t in agent_tool_set],
         "tool_coverage": round(tool_coverage, 4),
         "semantic_match": round(semantic_match, 4),
+        "semantic_match_method": semantic_match_method,
         "branch_triggered_in_gt": (
-            "A" if ("Branch A triggered" in _safe_str(task.gt_execution_log)) else
-            "B" if ("Branch B triggered" in _safe_str(task.gt_execution_log)) else
+            "A" if ("Branch A triggered" in gt_log) else
+            "B" if ("Branch B triggered" in gt_log) else
             "unknown"
         ),
         "agent_branch_correct": branch_correct,
@@ -728,6 +798,7 @@ def route_and_score(
     agent_tool_calls: List[str],
     agent_response: str,
     agent_step_count: int,
+    llm_client=None,                # AsyncLiteLLMClient 实例（可选，传给 parallel_execution 评分）
 ) -> Dict[str, Any]:
     """
     根据幻觉类型和 Bucket 自动路由到对应的评分策略。
@@ -763,8 +834,8 @@ def route_and_score(
         # 有状态：State Assertion
         return score_state_assertions(task, agent_tool_calls, agent_response)
     else:
-        # 无状态 (BASIC / FINANCIAL / ANALYTICS / 其他)：Parallel Execution
-        return score_parallel_execution_sync(task, agent_tool_calls, agent_response)
+        # 无状态 (BASIC / FINANCIAL / ANALYTICS / 其他)：Parallel Execution（含 LLM Judge）
+        return score_parallel_execution_sync(task, agent_tool_calls, agent_response, llm_client=llm_client)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -844,6 +915,41 @@ def build_tasks_from_completion_csv(df: pd.DataFrame) -> List[Task]:
 # 10. 主评测流程（从已有 completion CSV 评分）
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _build_llm_judge_client():
+    """
+    根据 .env 中的 EVAL_LLM_* 环境变量创建 LLM Judge 客户端。
+    若环境变量缺失或 mcp_evals_scores 不可用，返回 None。
+    """
+    if not _EVALS_AVAILABLE:
+        logger.warning("mcp_evals_scores 不可用，LLM Judge 功能已禁用")
+        return None
+
+    eval_model = os.getenv("EVAL_LLM_MODEL", "").strip()
+    eval_api_key = os.getenv("EVAL_LLM_API_KEY", "").strip() or os.getenv("LLM_API_KEY", "").strip()
+    eval_base_url = os.getenv("EVAL_LLM_BASE_URL", "").strip() or os.getenv("LLM_BASE_URL", "").strip()
+
+    if not eval_model:
+        logger.warning("EVAL_LLM_MODEL 未配置，LLM Judge 功能已禁用。请在 .env 中设置 EVAL_LLM_MODEL")
+        return None
+    if not eval_api_key:
+        logger.warning("EVAL_LLM_API_KEY 未配置，LLM Judge 功能已禁用")
+        return None
+
+    # 临时设置 litellm 环境变量（AsyncLiteLLMClient 在 __init__ 里会读取）
+    os.environ["EVAL_LLM_API_KEY"] = eval_api_key
+    if eval_base_url:
+        os.environ["EVAL_LLM_BASE_URL"] = eval_base_url
+
+    try:
+        config = _EvaluatorConfig(evaluator_model=eval_model, semaphore_limit=1)
+        client = _AsyncLiteLLMClient(config)
+        logger.info(f"✅ LLM Judge 已启用: model={eval_model}, base_url={eval_base_url or '(default)'}")
+        return client
+    except Exception as e:
+        logger.warning(f"LLM Judge 客户端创建失败: {e}，退化为关键词匹配")
+        return None
+
+
 def evaluate_from_completion_csv(
     completion_csv_path: str,
     output_csv_path: str,
@@ -875,6 +981,9 @@ def evaluate_from_completion_csv(
     # 重建 Task 对象列表
     tasks = build_tasks_from_completion_csv(df)
 
+    # ── 创建 LLM Judge 客户端（读 .env 中的 EVAL_LLM_* 配置）─────────────────
+    llm_client = _build_llm_judge_client()
+
     # 逐行评分
     result_rows = []
     for i, (task, (_, row)) in enumerate(zip(tasks, df.iterrows())):
@@ -889,9 +998,12 @@ def evaluate_from_completion_csv(
         agent_response = parse_model_response(dict(row))
         agent_step_count = len(agent_tool_calls)
 
-        # 执行评分路由
+        # 执行评分路由（透传 llm_client）
         try:
-            components = route_and_score(task, agent_tool_calls, agent_response, agent_step_count)
+            components = route_and_score(
+                task, agent_tool_calls, agent_response, agent_step_count,
+                llm_client=llm_client,
+            )
             score = components.get("score", 0.0)
             strategy = components.get("strategy", "unknown")
         except Exception as e:
@@ -1029,9 +1141,18 @@ async def run_full_pipeline(
         # 动态导入（需要 mcp-atlas 在 sys.path 中）
         import importlib.util
         mcp_script_path = MCP_ATLAS_EVAL_DIR / "mcp_completion_script.py"
+
+        # mcp_completion_script.py 顶层有 logging.FileHandler("completion_results/mcp_eval.log")
+        # 该相对路径基于 mcp_completion_script.py 所在目录，需提前创建并切换工作目录
+        _orig_cwd = os.getcwd()
+        os.chdir(MCP_ATLAS_EVAL_DIR)
+        (MCP_ATLAS_EVAL_DIR / "completion_results").mkdir(exist_ok=True)
+
         spec = importlib.util.spec_from_file_location("mcp_completion_script", mcp_script_path)
         mcp_mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mcp_mod)
+
+        os.chdir(_orig_cwd)  # 导入完成后切回原目录
 
         AsyncMCPTrajectoryGenerator = mcp_mod.AsyncMCPTrajectoryGenerator
 
@@ -1045,6 +1166,11 @@ async def run_full_pipeline(
         logger.info(f"Agent 执行完毕，结果: {completion_csv}")
 
     except Exception as e:
+        # 确保异常时也切回原目录
+        try:
+            os.chdir(_orig_cwd)
+        except Exception:
+            pass
         logger.error(f"Agent 执行失败: {e}，将尝试对空轨迹评分")
         # 若 Agent 执行失败，生成空轨迹的 completion CSV
         empty_rows = []
