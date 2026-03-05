@@ -156,44 +156,64 @@ Before generating, verify:
     - 函数内部使用 `from mcp_client import call_tool` 调用真实 MCP 工具
     - 函数必须**返回一个字符串**，包含所有执行记录和结果（用于后续传给 LLM 生成 reference answer）
     - 返回的字符串必须包含：工具选择过程、为什么选择正确工具、为什么其他工具不正确、执行结果
+    - **⚠️ 调用格式（CRITICAL）**：
+      - `call_tool` 必须使用**两参数**格式：`call_tool("完整工具名", {参数dict})`
+      - 完整工具名 = `available_tools` 列表中的名称（如 `"brave-search_brave_web_search"`）
+      - ❌ 禁止三参数写法：`call_tool('server_b', 'tool_b', args)`
+      - ✅ 正确写法：`call_tool('brave-search_brave_web_search', {'query': 'Tokyo restaurants'})`
+    - **⚠️ 字段访问（CRITICAL）**：
+      - ❌ 禁止直接索引：`data['field']`（字段不存在时会 KeyError 崩溃）
+      - ✅ 必须防御性访问：`data.get('field', default_value)`
+      - 嵌套字段：`data.get('a', {}).get('b', {}).get('c')`
+      - 每个工具调用后必须先 log 原始返回前 200 字符，方便调试：
+        `execution_log.append(f"[RAW] {str(raw_result)[:200]}")`
     - 函数格式示例：
       ```python
       def generate_reference_answer():
           import json
           from mcp_client import call_tool
-          
+
           execution_log = []
-          
+
           # 分析工具选择
+          # ✅ 正确调用格式：call_tool("完整工具名", {参数dict})，工具名来自 available_tools 列表
+          # ❌ 禁止三参数写法 call_tool('server', 'tool', args)
           execution_log.append("Step 1: Analyzing task requirements...")
           execution_log.append("Task requires: [specific format/parameter/capability]")
-          execution_log.append("Available similar tools: tool_a (server_a), tool_b (server_b), tool_c (server_c)")
-          
+          execution_log.append("Available similar tools: server_a_tool_a, server_b_tool_b")
+
           # 尝试混淆工具（展示它们可以执行但结果不对）
-          execution_log.append("Step 2: Testing confusion tools...")
-          execution_log.append("Attempting tool_b (server_b) - executes successfully:")
+          execution_log.append("Step 2: Testing confusion tool 'server_b_tool_b'...")
           try:
-              wrong_result = call_tool('server_b', 'tool_b', {...})
-              wrong_data = json.loads(wrong_result) if isinstance(wrong_result, str) else wrong_result
-              execution_log.append(f"Tool_b result: {json.dumps(wrong_data, indent=2)}")
+              raw_wrong = call_tool('server_b_tool_b', {'query': 'test_value'})
+              execution_log.append(f"[RAW] {str(raw_wrong)[:200]}")
+              wrong_data = json.loads(raw_wrong) if isinstance(raw_wrong, str) else raw_wrong
+              execution_log.append(f"Tool result type: {type(wrong_data).__name__}")
               execution_log.append("Problem: [e.g., returns plain text instead of JSON, missing required fields, etc.]")
           except Exception as e:
               execution_log.append(f"ERROR: Tool should be executable but failed: {e}")
-          
+
           # 选择正确工具并执行
-          execution_log.append("Step 3: Selected tool_a (server_a) because [reason]")
-          execution_log.append("Calling tool 'server_a.tool_a' with params {...}")
-          result = call_tool('server_a', 'tool_a', {...})
-          result_data = json.loads(result) if isinstance(result, str) else result
-          execution_log.append(f"Result: {json.dumps(result_data, indent=2)}")
+          execution_log.append("Step 3: Selected 'server_a_tool_a' because [reason]")
+          raw_correct = call_tool('server_a_tool_a', {'query': 'actual_value'})
+          execution_log.append(f"[RAW] {str(raw_correct)[:200]}")
+          result_data = json.loads(raw_correct) if isinstance(raw_correct, str) else raw_correct
+          # 防御性访问字段
+          key_field = result_data.get('key_field', 'unknown')
+          execution_log.append(f"key_field = {key_field}")
           execution_log.append("This result meets task requirements: [explain why]")
-          
+
           # 说明为什么其他工具不正确（但它们可以执行）
-          execution_log.append("Step 4: Why tool_b is wrong: [reason - but it executes successfully]")
-          execution_log.append("Why tool_c is wrong: [reason - but it executes successfully]")
-          
+          execution_log.append("Step 4: Why 'server_b_tool_b' is wrong: [reason - but it executes successfully]")
+
           return "\\n".join(execution_log)
       ```
+  - **CRITICAL - 防御性字段访问规范**：
+    - ❌ 禁止：`data['field']`（假设字段一定存在）
+    - ✅ 要求：`data.get('field', default_value)`（防御性访问）
+    - 对所有工具返回值必须用 `.get()` 或 `if key in data` 访问字段
+    - 遇到嵌套结构如 `data['a']['b']['c']` 必须改为 `data.get('a', {}).get('b', {}).get('c')`
+    - 每个工具调用后必须先 `execution_log.append(f"[RAW] {str(raw_result)[:200]}")` 打印原始返回
   - **state_assertions**: 必须是空数组 `[]`
 
 - **B. 有状态/操作类任务**
@@ -216,7 +236,7 @@ Generate a SINGLE JSON object strictly following this schema:
   // Only the tools actually needed for the task should be listed in evaluation_rules.required_tools
   "ground_truth": {
     "strategy": "dynamic_script",
-    "dynamic_reference_script": "def generate_reference_answer():\n    import json\n    from mcp_client import call_tool\n    \n    execution_log = []\n    \n    # 分析工具选择\n    execution_log.append(\"Step 1: Analyzing task requirements...\")\n    execution_log.append(\"Task requires: [specific format/parameter/capability]\")\n    execution_log.append(\"Available similar tools: tool_a (server_a), tool_b (server_b), tool_c (server_c)\")\n    \n    # 尝试混淆工具（展示它们可以执行但结果不对）\n    execution_log.append(\"Step 2: Testing confusion tools...\")\n    execution_log.append(\"Attempting tool_b (server_b) - executes successfully:\")\n    try:\n        wrong_result = call_tool('server_b', 'tool_b', {...})\n        wrong_data = json.loads(wrong_result) if isinstance(wrong_result, str) else wrong_result\n        execution_log.append(f\"Tool_b result: {json.dumps(wrong_data, indent=2)}\")\n        execution_log.append(\"Problem: [e.g., returns plain text instead of JSON, missing required fields, etc.]\")\n    except Exception as e:\n        execution_log.append(f\"ERROR: Tool should be executable but failed: {e}\")\n    \n    # 选择正确工具并执行\n    execution_log.append(\"Step 3: Selected tool_a (server_a) because [reason]\")\n    execution_log.append(\"Calling tool 'server_a.tool_a' with params {...}\")\n    result = call_tool('server_a', 'tool_a', {...})\n    result_data = json.loads(result) if isinstance(result, str) else result\n    execution_log.append(f\"Result: {json.dumps(result_data, indent=2)}\")\n    execution_log.append(\"This result meets task requirements: [explain why]\")\n    \n    # 说明为什么其他工具不正确（但它们可以执行）\n    execution_log.append(\"Step 4: Why tool_b is wrong: [reason - but it executes successfully]\")\n    execution_log.append(\"Why tool_c is wrong: [reason - but it executes successfully]\")\n    \n    return \"\\n\".join(execution_log)",
+    "dynamic_reference_script": "def generate_reference_answer():\n    import json\n    from mcp_client import call_tool\n\n    execution_log = []\n\n    # 分析工具选择\n    # ✅ 调用格式：call_tool('完整工具名', {参数dict})，工具名来自 available_tools 列表\n    # ❌ 禁止三参数写法 call_tool('server', 'tool', args)\n    execution_log.append(\"Step 1: Analyzing task requirements...\")\n    execution_log.append(\"Task requires: [specific format/parameter/capability]\")\n    execution_log.append(\"Available similar tools: server_a_tool_a, server_b_tool_b\")\n\n    # 尝试混淆工具（展示它们可以执行但结果不对）\n    execution_log.append(\"Step 2: Testing confusion tool 'server_b_tool_b'...\")\n    try:\n        raw_wrong = call_tool('server_b_tool_b', {'query': 'test_value'})\n        execution_log.append(f\"[RAW] {str(raw_wrong)[:200]}\")\n        wrong_data = json.loads(raw_wrong) if isinstance(raw_wrong, str) else raw_wrong\n        execution_log.append(f\"Tool result type: {type(wrong_data).__name__}\")\n        execution_log.append(\"Problem: [e.g., returns plain text instead of JSON, missing required fields]\")\n    except Exception as e:\n        execution_log.append(f\"ERROR: Tool should be executable but failed: {e}\")\n\n    # 选择正确工具并执行\n    execution_log.append(\"Step 3: Selected 'server_a_tool_a' because [reason]\")\n    raw_correct = call_tool('server_a_tool_a', {'query': 'actual_value'})\n    execution_log.append(f\"[RAW] {str(raw_correct)[:200]}\")\n    result_data = json.loads(raw_correct) if isinstance(raw_correct, str) else raw_correct\n    key_field = result_data.get('key_field', 'unknown')\n    execution_log.append(f\"key_field = {key_field}\")\n    execution_log.append(\"This result meets task requirements: [explain why]\")\n\n    execution_log.append(\"Step 4: Why 'server_b_tool_b' is wrong: [reason - but it executes successfully]\")\n\n    return \"\\n\".join(execution_log)",
     "state_assertions": []
   },
   "evaluation_rules": {
@@ -253,4 +273,6 @@ Generate a SINGLE JSON object strictly following this schema:
 - [ ] Function returns a string containing all execution records and tool call results (for LLM reference answer generation)
 - [ ] `available_tools` includes ALL tools from all servers used (not just required tools)
 - [ ] No ambiguity that makes multiple tools equally valid
+- [ ] `dynamic_reference_script` 中所有 `call_tool` 均使用**两参数**格式：`call_tool("完整工具名", {参数dict})`，工具名来自 `available_tools` 列表，❌ 禁止 `call_tool('server', 'tool', args)` 三参数写法
+- [ ] `dynamic_reference_script` 中所有字段访问均使用 `.get()` 防御性写法，❌ 禁止 `data['field']` 直接索引
 

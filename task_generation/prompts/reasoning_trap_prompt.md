@@ -148,7 +148,7 @@ Before generating, verify:
 - **A. 无状态/查询类任务**
   - **strategy**: `dynamic_script`
   - **dynamic_reference_script**: 必填，必须是一个**可直接执行的 Python 函数**（函数名为 `generate_reference_answer`）
-    - 函数内部使用 `from mcp_completion.mcp_client import call_tool_sync ` 调用真实 MCP 工具
+    - 函数内部使用 `from mcp_client import call_tool` 调用真实 MCP 工具
     - 函数必须**返回一个字符串**，包含所有执行记录和结果（用于后续传给 LLM 生成 reference answer）
     - 返回的字符串必须包含：
       - 每个工具调用的记录（调用了什么工具、参数是什么）
@@ -156,44 +156,66 @@ Before generating, verify:
       - 条件分支的判断过程和结果
       - 最终聚合的结果
     - 函数必须包含完整的条件分支逻辑和结果聚合
+    - **⚠️ 调用格式（CRITICAL）**：
+      - `call_tool` 必须使用**两参数**格式：`call_tool("完整工具名", {参数dict})`
+      - 完整工具名 = `available_tools` 列表中的名称（如 `"weather_get_current_weather"`）
+      - ❌ 禁止三参数写法：`call_tool('server', 'tool', args)`
+      - ✅ 正确写法：`call_tool('weather_get_current_weather', {'location': 'Tokyo'})`
+    - **⚠️ 字段访问（CRITICAL）**：
+      - ❌ 禁止直接索引：`data['field']`（字段不存在时会 KeyError 崩溃）
+      - ✅ 必须防御性访问：`data.get('field', default_value)`
+      - 嵌套字段：`data.get('a', {}).get('b', {}).get('c')`
+      - 每个工具调用后必须先 log 原始返回前 200 字符，方便调试：
+        `execution_log.append(f"[RAW] {str(raw_result)[:200]}")`
     - 函数格式示例：
       ```python
       def generate_reference_answer():
           import json
           from mcp_client import call_tool
-          
+
           execution_log = []
-          
+
           # 1. 获取决策信号
-          execution_log.append("Step 1: Calling tool 'server_name.tool_name' with params {...}")
-          signal_res = call_tool('server_name', 'tool_name', {...})
-          signal_data = json.loads(signal_res) if isinstance(signal_res, str) else signal_res
-          execution_log.append(f"Result: {json.dumps(signal_data, indent=2)}")
-          
+          # ✅ 正确调用格式：call_tool("完整工具名", {参数dict})，工具名来自 available_tools 列表
+          # ❌ 禁止三参数写法 call_tool('server', 'tool', args)
+          execution_log.append("Step 1: Calling tool 'server_name_tool_name'")
+          raw_signal = call_tool('server_name_tool_name', {'param': 'value'})
+          execution_log.append(f"[RAW] {str(raw_signal)[:200]}")
+          signal_data = json.loads(raw_signal) if isinstance(raw_signal, str) else raw_signal
+
+          # 防御性访问字段（不假设字段一定存在）
+          condition_A = signal_data.get('condition_field', None)
+          execution_log.append(f"Condition A value: {condition_A}")
+
           # 2. 条件分支
           if condition_A:
               execution_log.append(f"Branch A triggered: condition_A = {condition_A}")
-              execution_log.append("Step 2: Calling tool 'server_a.tool_a' with params {...}")
-              branch_a_res = call_tool('server_a', 'tool_a', {...})
-              branch_a_data = json.loads(branch_a_res) if isinstance(branch_a_res, str) else branch_a_res
-              execution_log.append(f"Result: {json.dumps(branch_a_data, indent=2)}")
-              # ... 更多工具调用和记录
-              result = {'branch': 'A', 'data': branch_a_data, ...}
-          elif condition_B:
-              ...
-              result = {'branch': 'B', 'data': branch_b_data, ...}
+              execution_log.append("Step 2: Calling tool 'server_a_tool_a'")
+              raw_a = call_tool('server_a_tool_a', {'input': condition_A})
+              execution_log.append(f"[RAW] {str(raw_a)[:200]}")
+              branch_a_data = json.loads(raw_a) if isinstance(raw_a, str) else raw_a
+              result = {'branch': 'A', 'data': branch_a_data.get('result', branch_a_data)}
+          elif condition_A is not None:
+              execution_log.append(f"Branch B triggered")
+              raw_b = call_tool('server_b_tool_b', {'input': 'value'})
+              execution_log.append(f"[RAW] {str(raw_b)[:200]}")
+              branch_b_data = json.loads(raw_b) if isinstance(raw_b, str) else raw_b
+              result = {'branch': 'B', 'data': branch_b_data.get('result', branch_b_data)}
           else:
-              ...
-              result = {'branch': 'C', 'data': branch_c_data, ...}
-          
+              result = {'branch': 'C', 'data': None}
+
           # 3. 聚合结果
           execution_log.append("Step 3: Aggregating results...")
-          final_answer = aggregate_results(result)
-          execution_log.append(f"Final answer: {json.dumps(final_answer, indent=2)}")
-          
-          # 4. 返回包含所有执行记录和结果的字符串
+          execution_log.append(f"Final result: {str(result)[:300]}")
+
           return "\\n".join(execution_log)
       ```
+  - **CRITICAL - 防御性字段访问规范**：
+    - ❌ 禁止：`data['field']`（假设字段一定存在）
+    - ✅ 要求：`data.get('field', default_value)`（防御性访问）
+    - 对所有工具返回值必须用 `.get()` 或 `if key in data` 访问字段
+    - 遇到嵌套结构如 `data['a']['b']['c']` 必须改为 `data.get('a', {}).get('b', {}).get('c')`
+    - 每个工具调用后必须先 `execution_log.append(f"[RAW] {str(raw_result)[:200]}")` 打印原始返回
   - **state_assertions**: 必须是空数组 `[]`
 
 - **B. 有状态/操作类任务**
@@ -217,11 +239,7 @@ Generate a SINGLE JSON object strictly following this schema:
   // Only the tools actually needed for the task should be listed in Tool Definitions
   "ground_truth": {
     "strategy": "dynamic_script",
-    "dynamic_reference_script": "def generate_reference_answer():
-    import json
-    from mcp_completion.mcp_client import call_tool_sync 
-    ...
-    return "\n".join(execution_log)",
+    "dynamic_reference_script": "def generate_reference_answer():\n    import json\n    from mcp_client import call_tool\n\n    execution_log = []\n\n    # ✅ 调用格式：call_tool('完整工具名', {参数dict})，工具名来自 available_tools 列表\n    # ❌ 禁止三参数写法 call_tool('server', 'tool', args)\n    execution_log.append(\"Step 1: Calling tool 'server_name_tool_name'\")\n    raw1 = call_tool('server_name_tool_name', {'param': 'value'})\n    execution_log.append(f\"[RAW] {str(raw1)[:200]}\")\n    signal_data = json.loads(raw1) if isinstance(raw1, str) else raw1\n\n    # 防御性访问字段（不假设字段一定存在）\n    condition_val = signal_data.get('condition_field', None)\n    execution_log.append(f\"Condition value: {condition_val}\")\n\n    # 条件分支\n    if condition_val:\n        raw2 = call_tool('server_a_tool_a', {'input': condition_val})\n        execution_log.append(f\"[RAW] {str(raw2)[:200]}\")\n        branch_data = json.loads(raw2) if isinstance(raw2, str) else raw2\n        result = branch_data.get('result', branch_data)\n    else:\n        raw2 = call_tool('server_b_tool_b', {'input': 'value'})\n        execution_log.append(f\"[RAW] {str(raw2)[:200]}\")\n        branch_data = json.loads(raw2) if isinstance(raw2, str) else raw2\n        result = branch_data.get('result', branch_data)\n\n    execution_log.append(f\"Final result: {str(result)[:300]}\")\n    return \"\\n\".join(execution_log)",
     "state_assertions": []
   },
   "evaluation_rules": {
@@ -274,4 +292,6 @@ Generate a SINGLE JSON object strictly following this schema:
 - [ ] Function returns a string containing all execution records and tool call results (for LLM reference answer generation)
 - [ ] `available_tools` includes ALL tools from all servers used (not just required tools)
 - [ ] Claims section lists all branches explicitly
+- [ ] `dynamic_reference_script` 中所有 `call_tool` 均使用**两参数**格式：`call_tool("完整工具名", {参数dict})`，工具名来自 `available_tools` 列表，❌ 禁止 `call_tool('server', 'tool', args)` 三参数写法
+- [ ] `dynamic_reference_script` 中所有字段访问均使用 `.get()` 防御性写法，❌ 禁止 `data['field']` 直接索引
 
