@@ -22,8 +22,8 @@ uv run python generate_tasks_from_prompt.py \
 
 # 生成其他类型（reasoning / confusion / void）
 uv run python generate_tasks_from_prompt.py \
-  --type reasoning \
-  --output tasks/reasoning_v2_tasks.jsonl
+  --type void \
+  --output tasks/void_tasks.jsonl
 
 # 生成全部 4 种类型 × 全部 bucket
 uv run python generate_tasks_from_prompt.py \
@@ -53,7 +53,7 @@ TYPE_ALIASES = {
     "Void Trap": "Void Trap",
 }
 # LLM 配置（优先读环境变量）
-LLM_MODEL = os.getenv("LLM_MODEL", "gemini-2.5-flash")
+LLM_MODEL = os.getenv("LLM_MODEL", "gemini-3-pro-preview")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "2004053110662512723")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://aigc.sankuai.com/v1/openai/native")
 

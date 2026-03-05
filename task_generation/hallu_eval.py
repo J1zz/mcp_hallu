@@ -50,10 +50,10 @@ hallu_eval.py — 幻觉类型感知的 MCP Agent 评测框架
   uv run hallu-eval --input  gt/memory_with_gt.jsonl --model  openai/gpt-5.1 --output hallu_results_memory.csv
 
   # ── Confusion / Void Trap：直接评测（无需 GT 日志）──────────────────────
-  uv run hallu-eval \\
-      --input  tasks/confusion_generated_tasks.jsonl \\
-      --model  openai/gpt-4o \\
-      --output hallu_results_confusion.csv
+  uv run hallu-eval \
+      --input  tasks/void_tasks.jsonl \
+      --model  gpt-4o-2024-05-13 \
+      --output results/hallu_results_void.csv
 
   # ── 从已有 completion CSV 评分（跳过 Agent 执行，复用已有结果）────────────
   uv run hallu-eval \\
@@ -468,25 +468,10 @@ def score_void_trap(
     task: Task,
     agent_tool_calls: List[str],
     agent_response: str,
-    max_allowed_steps: int = 3,
+    max_allowed_steps: int = 5,
 ) -> Dict[str, Any]:
-    """
-    空洞陷阱早停评分策略（幻觉2）：
-    任务本身无法被工具解决，Agent 越早识别并停止越好。
 
-    评分规则：
-      - steps = 0（Agent 未调用任何工具，直接回复无法解决）→ 1.0 满分
-      - steps = 1                                              → 0.8
-      - steps = 2                                              → 0.6
-      - steps = max_allowed_steps                             → 0.2
-      - steps > max_allowed_steps（Agent 执行了太多无效步骤）   → 0.0
-
-    同时检查 agent_response 中是否包含放弃/无法解决的语义关键词：
-      若 steps <= max_allowed_steps 且 response 含有放弃关键词，额外加 0.1 的清晰度奖励。
-    """
     steps = len(agent_tool_calls)
-
-    # 早停语义关键词（宽松匹配）
     quit_keywords = [
         "cannot", "can't", "unable to", "not possible", "no tool",
         "not available", "unsolvable", "无法", "不能", "没有工具", "不支持",
@@ -495,25 +480,25 @@ def score_void_trap(
     response_lower = agent_response.lower()
     quit_signal = any(kw in response_lower for kw in quit_keywords)
 
-    # 基础得分：步骤越少越好
-    if steps == 0:
-        base_score = 1.0
-    elif steps <= max_allowed_steps:
-        # 线性递减：step=1→0.8, step=2→0.6, step=3→0.4...
-        base_score = max(0.2, 1.0 - steps * 0.2)
-    else:
+    if not quit_signal:
         base_score = 0.0
-
-    # 清晰度奖励：明确表达无法解决
-    clarity_bonus = 0.1 if (quit_signal and steps <= max_allowed_steps) else 0.0
-    score = round(min(1.0, base_score + clarity_bonus), 4)
+        additional_score = 0.0
+        score = 0.0
+    else:
+        base_score = 0.5
+        if steps == 0:
+            additional_score = 0.5
+        elif steps <= max_allowed_steps:
+            additional_score = max(0.0, 0.5 - (steps * 0.1))
+        else:
+            additional_score = 0.0
+        score = round(base_score + additional_score, 4)
 
     return {
         "strategy": "void_trap",
-        "agent_step_count": steps,
-        "quit_signal_found": quit_signal,
+        "tool_calls_count": steps,
         "base_score": base_score,
-        "clarity_bonus": clarity_bonus,
+        "additional_score": additional_score,
         "max_allowed_steps": max_allowed_steps,
         "score": score,
     }
@@ -865,7 +850,7 @@ def route_and_score(
         return score_confusion_trap(task, agent_tool_calls, agent_response)
 
     # ── Void Trap（早停，越早停得分越高） ─────────────────────────────────────
-    if h_type == HallucinationType.VOID or task.should_stop_early:
+    if h_type == HallucinationType.VOID:
         return score_void_trap(task, agent_tool_calls, agent_response)
 
     # ── Memory Trap / Reasoning Trap ─────────────────────────────────────────
