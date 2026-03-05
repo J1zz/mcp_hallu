@@ -152,13 +152,18 @@ async def run_full_pipeline(
     tmp_csv  = tempfile.mktemp(suffix=".csv")
     tasks_df = tasks_to_csv(tasks, tmp_csv)
 
-    completion_csv = output_csv.replace(".csv", "_completion.csv")
+    # 使用绝对路径避免 chdir 后相对路径不在预期目录
+    completion_csv_path = Path(output_csv).with_name(
+        Path(output_csv).stem + "_completion.csv"
+    ).resolve()
+    completion_csv_path.parent.mkdir(parents=True, exist_ok=True)
+
     orig_cwd = os.getcwd()
 
     try:
         os.chdir(MCP_ATLAS_EVAL_DIR)
         (MCP_ATLAS_EVAL_DIR / "completion_results").mkdir(exist_ok=True)
-        Path(completion_csv).unlink(missing_ok=True)
+        completion_csv_path.unlink(missing_ok=True)
 
         spec = importlib.util.spec_from_file_location(
             "mcp_completion_script", MCP_ATLAS_EVAL_DIR / "mcp_completion_script.py"
@@ -168,7 +173,9 @@ async def run_full_pipeline(
         mcp_mod.SERVER_URL = server_url
 
         async with mcp_mod.AsyncMCPTrajectoryGenerator(model) as gen:
-            await gen.evaluate_dataset_async(tasks_df, completion_csv, None, concurrency)
+            await gen.evaluate_dataset_async(
+                tasks_df, str(completion_csv_path), None, concurrency
+            )
 
     except Exception as e:
         logger.error(f"Agent 执行失败: {e}，将以空轨迹评分")
@@ -177,11 +184,13 @@ async def run_full_pipeline(
              "trajectory": "[]", "errors": "[]", "trajectory_time": 0.0, "num_retry": 0}
             for _, r in tasks_df.iterrows()
         ]
-        pd.DataFrame(empty).to_csv(completion_csv, index=False)
+        pd.DataFrame(empty).to_csv(completion_csv_path, index=False)
     finally:
         os.chdir(orig_cwd)
 
-    result_df = evaluate_from_completion_csv(completion_csv, output_csv, pass_threshold)
+    result_df = evaluate_from_completion_csv(
+        str(completion_csv_path), output_csv, pass_threshold
+    )
 
     try:
         Path(tmp_csv).unlink(missing_ok=True)
