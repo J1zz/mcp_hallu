@@ -11,11 +11,6 @@ from .trajectory import _safe_str
 
 logger = logging.getLogger(__name__)
 
-
-# ---------------------------------------------------------------------------
-# 通用工具
-# ---------------------------------------------------------------------------
-
 def _tool_hit_rate(required: List[str], tool_set: set) -> float:
     return sum(1 for t in required if t in tool_set) / max(1, len(required)) if required else 1.0
 
@@ -32,10 +27,6 @@ def _keyword_semantic_match(task: Task, agent_response: str) -> float:
     resp = agent_response.lower()
     return min(1.0, sum(1 for kw in keywords if kw.lower() in resp) / max(1, len(keywords)))
 
-
-# ---------------------------------------------------------------------------
-# LLM Judge
-# ---------------------------------------------------------------------------
 
 def _call_llm_judge(
     task: Task,
@@ -92,11 +83,7 @@ def _call_llm_judge(
     logger.info(f"  LLM Judge: {score:.3f} | {result.get('reason', '')[:80]}")
     return score
 
-
-# ---------------------------------------------------------------------------
 # 评分策略
-# ---------------------------------------------------------------------------
-
 def score_confusion_trap(
     task: Task,
     agent_tool_calls: List[str],

@@ -5,8 +5,8 @@
                    --output gt/reasoning_with_gt.jsonl
 
   # 评测
-  uv run hallu-eval --input tasks/reasoning_generated_tasks.jsonl \\
-                    --model openai/gpt-4o --output results/eval.csv
+  uv run hallu-eval --input tasks/void_tasks.jsonl \
+                    --model gpt-4o-2024-05-13 --output results/eval.csv
 
   # 跳过 Agent 执行，对已有 completion CSV 评分
   uv run hallu-eval --from-completion-csv completion_results/sample.csv \\
@@ -40,7 +40,7 @@ def _parse_args():
     src.add_argument("--input", help="JSONL 任务文件")
     src.add_argument("--from-completion-csv", dest="completion_csv", help="直接对已有 completion评分")
     p.add_argument("--convert-only", action="store_true", help="仅将 JSONL 转为 CSV，不执行 Agent 也不评分（需配合 --input）")
-    p.add_argument("--output", equired=True,  help="输出 CSV 文件路径")
+    p.add_argument("--output", required=True,  help="输出 CSV 文件路径")
     p.add_argument("--model", default=os.getenv("LLM_MODEL", "openai/gpt-4o"))
     p.add_argument("--server-url",     default=os.getenv("SERVER_URL", "http://localhost:3000"),help="mcp-atlas Agent 服务地址")
     p.add_argument("--concurrency",    type=int,   default=3,   help="并发 Agent 请求数")
@@ -51,7 +51,7 @@ def _parse_args():
 
 def main():
     args = _parse_args()
-
+        
     # 仅转换 JSONL → CSV
     if args.convert_only:
         if not args.input:
