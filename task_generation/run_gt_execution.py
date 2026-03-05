@@ -1,24 +1,16 @@
-"""
-独立脚本：对「生成任务」中的 dynamic_reference_script 执行 generate_reference_answer，得到 GT 执行结果。
+"""run_gt_execution.py — GT (Ground Truth) 执行脚本
 
-用途：在已有 benchmark 之外，专门用于「你修改/新增的」生成任务（如 reasoning_generated_tasks.jsonl）
-的 Ground Truth 执行与结果收集，不与原有 mcp_eval 流程混淆。
+从 task JSONL 文件中读取 dynamic_reference_script，逐条执行
+generate_reference_answer()，将执行日志（gt_execution_log）写回输出 JSONL。
 
 用法:
-  # 在项目根 mcp-atlas 下执行，保证能 import mcp_completion
-  cd /path/to/mcp-atlas
-  python task_generation/run_gt_execution.py --input task_generation/tasks/reasoning_generated_tasks.jsonl --output task_generation/tasks/reasoning_generated_tasks_with_gt.jsonl
+  python run_gt_execution.py --input tasks/reasoning_generated_tasks.jsonl \\
+                             --output gt/reasoning_with_gt.jsonl
 
-  # 或指定 tasks 目录下的文件名（相对 task_generation 的 tasks/）
-  python task_generation/run_gt_execution.py --input tasks/reasoning_generated_tasks.jsonl --output tasks/reasoning_generated_tasks_with_gt.jsonl
-
-输出：与输入同结构的 jsonl，每行增加字段：
-  - gt_execution_log: 成功时 generate_reference_answer() 的返回字符串
-  - gt_execution_error: 失败时的错误信息（成功时为 null）
-  - gt_execution_ok: true/false
-
-注意：脚本内应使用 call_tool_sync(tool_name, args)，其中 tool_name 为完整名（如 "osm-mcp-server_search_category"）。
-若生成的脚本仍为 call_tool_sync(server, tool_name, params) 三参数形式，需在 prompt 中修正或在此处做兼容。
+选项:
+  --limit N      只处理前 N 条任务（调试用）
+  --no-rollback  禁用写操作补偿回滚（默认启用）
+  --verbose      打印失败任务的完整 traceback
 """
 
 import argparse
@@ -26,46 +18,34 @@ import json
 import os
 import sys
 import traceback
-import requests
+import types as _types
 from pathlib import Path
-from typing import Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
-# ── MCP Server 地址（1984 端口为工具执行环境）────────────────────────────────
-# 优先读取环境变量，默认指向本地 1984 端口
+import requests
+
 MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:1984")
 
-# ── call_tool_sync：同步调用 MCP Server 的工具 ────────────────────────────────
-# run_gt_execution.py 需要在 dynamic_reference_script 执行期间调用真实工具。
-# 通过 HTTP 调用 1984 端口的 /call-tool 接口实现，无需依赖 mcp_completion 包。
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 1. 底层工具调用
+# ──────────────────────────────────────────────────────────────────────────────
 
 def _call_tool_sync_impl(tool_name: str, tool_args: dict) -> str:
-    """
-    同步调用 MCP Server（1984 端口）执行工具，返回结果字符串。
-
-    接口：POST {MCP_SERVER_URL}/call-tool
-    Body：{"tool_name": "...", "tool_args": {...}}
-    返回：工具结果的 JSON 字符串（或原始文本）
-
-    需要 MCP Server 处于运行状态。
-    """
+    """调用 MCP Server /call-tool 接口，返回结果字符串。"""
     url = f"{MCP_SERVER_URL}/call-tool"
     payload = {"tool_name": tool_name, "tool_args": tool_args}
     try:
         resp = requests.post(url, json=payload, timeout=60)
         resp.raise_for_status()
-        # 返回原始内容字符串，与 dynamic_reference_script 里的 json.loads() 兼容
         data = resp.json()
-        # 兼容两种响应格式：
-        #   1. {"content": [{"type":"text","text":"..."}]}  ← sandbox_client 格式
-        #   2. 直接是结果对象
-        if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
-            text = data[0].get("text", json.dumps(data))
-            return text
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            return data[0].get("text", json.dumps(data))
         return json.dumps(data) if not isinstance(data, str) else data
     except requests.exceptions.ConnectionError:
         raise RuntimeError(
             f"无法连接到 MCP Server ({url})。"
-            f"请先启动服务：cd mcp-atlas && make run-agent-environment"
+            f"请先启动：cd mcp-atlas && make run-agent-environment"
         )
     except requests.exceptions.Timeout:
         raise RuntimeError(f"工具调用超时（60s）：{tool_name}")
@@ -73,33 +53,180 @@ def _call_tool_sync_impl(tool_name: str, tool_args: dict) -> str:
         raise RuntimeError(f"工具调用失败 {tool_name}: {e}")
 
 
-# ── 虚拟的 mcp_client 模块对象，供猴子补丁使用 ───────────────────────────────
-# dynamic_reference_script 里可能写 "from mcp_completion.mcp_client import call_tool_sync"
-# 我们在运行时把这个模块注入进去，让 exec() 能找到正确的实现。
-import types as _types
+def _call_tool_sync_compat(tool_name_or_server: str, tool_args_or_name=None, tool_args_3rd=None) -> str:
+    """兼容两种调用签名：
+    - call_tool_sync(tool_name, args)         两参数
+    - call_tool_sync(server, tool_name, args) 三参数（server + tool_name 合并为 server_tool_name）
+    """
+    if tool_args_3rd is not None:
+        full_name = f"{tool_name_or_server}_{tool_args_or_name}"
+        return _call_tool_sync_impl(full_name, tool_args_3rd)
+    return _call_tool_sync_impl(tool_name_or_server, tool_args_or_name or {})
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 2. 写操作补偿（Compensating Transactions）
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _extract_id(result: Any, *fields: str) -> Optional[str]:
+    """从工具返回值中尝试提取资源 ID（按给定字段名顺序查找）。"""
+    if isinstance(result, dict):
+        for field in fields:
+            if field in result:
+                return str(result[field])
+            for val in result.values():
+                if isinstance(val, dict) and field in val:
+                    return str(val[field])
+    return None
+
+
+def _parse_result(raw: Any) -> Any:
+    """将工具原始返回字符串解析为 Python 对象，失败则原样返回。"""
+    if isinstance(raw, (dict, list)):
+        return raw
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return raw
+
+
+# 补偿映射表：tool_name → callable(args, parsed_result) → (inverse_tool, inverse_args) | None
+#
+# 只覆盖「可从调用结果中提取到足够回滚信息」的写操作（A 类可逆工具）。
+# 对于无法自动逆向的操作（github_push_files、mongodb_drop-collection 等），
+# 不在此表中注册，任务设计层面应避免在 GT 脚本中使用。
+COMPENSATION_MAP: Dict[str, Callable] = {
+
+    # ── Airtable ──────────────────────────────────────────────────────────────
+    "airtable_create_record": lambda args, res: (
+        "airtable_delete_record",
+        {"base_id": args.get("base_id"), "table_id": args.get("table_id"),
+         "record_id": _extract_id(res, "id")},
+    ) if _extract_id(res, "id") else None,
+
+    # ── MongoDB ───────────────────────────────────────────────────────────────
+    "mongodb_insert-many": lambda args, res: (
+        "mongodb_delete-many",
+        {
+            "database": args.get("database"),
+            "collection": args.get("collection"),
+            "filter": {"_id": {"$in": list((res.get("insertedIds") or {}).values())}},
+        },
+    ) if isinstance(res, dict) and res.get("insertedIds") else None,
+
+    "mongodb_create-collection": lambda args, res: (
+        "mongodb_drop-collection",
+        {"database": args.get("database"), "collection": args.get("collection")},
+    ),
+
+    "mongodb_rename-collection": lambda args, res: (
+        "mongodb_rename-collection",
+        {"database": args.get("database"),
+         "collection": args.get("newName"),
+         "newName": args.get("collection")},
+    ),
+
+    # ── Notion ────────────────────────────────────────────────────────────────
+    "notion_API-post-page": lambda args, res: (
+        "notion_API-delete-a-block",
+        {"block_id": _extract_id(res, "id")},
+    ) if _extract_id(res, "id") else None,
+
+    "notion_API-create-a-database": lambda args, res: (
+        "notion_API-delete-a-block",
+        {"block_id": _extract_id(res, "id")},
+    ) if _extract_id(res, "id") else None,
+
+    # ── Google Workspace ──────────────────────────────────────────────────────
+    "google-workspace_create_event": lambda args, res: (
+        "google-workspace_delete_event",
+        {"event_id": _extract_id(res, "id"),
+         "calendar_id": args.get("calendar_id", "primary")},
+    ) if _extract_id(res, "id") else None,
+
+    # ── Lara Translate ────────────────────────────────────────────────────────
+    "lara-translate_create_memory": lambda args, res: (
+        "lara-translate_delete_memory",
+        {"id": _extract_id(res, "id")},
+    ) if _extract_id(res, "id") else None,
+
+    "lara-translate_add_translation": lambda args, res: (
+        "lara-translate_delete_translation",
+        {"memory_id": args.get("memory_id"), "id": _extract_id(res, "id")},
+    ) if _extract_id(res, "id") else None,
+}
+
+
+class CompensationRegistry:
+    """记录 GT 执行过程中的写操作，任务结束后按逆序执行补偿（回滚）。
+
+    工作流：
+      registry = CompensationRegistry()
+      result = registry.tracked_call(tool_name, args)
+      # ... 执行完毕后 ...
+      registry.rollback()   ← 逆序撤销所有已记录的写操作
+    """
+
+    def __init__(self, enabled: bool = True):
+        self.enabled = enabled
+        self._log: List[Tuple[str, dict, Any]] = []
+
+    def tracked_call(self, tool_name: str, args: dict) -> str:
+        """调用工具；若该工具在补偿映射表中，则将结果追加到回滚日志。"""
+        raw_result = _call_tool_sync_impl(tool_name, args)
+        if self.enabled and tool_name in COMPENSATION_MAP:
+            self._log.append((tool_name, args, _parse_result(raw_result)))
+        return raw_result
+
+    def rollback(self):
+        """逆序执行所有已记录写操作的补偿调用；单条失败只记录警告，不中断整体。"""
+        if not self.enabled or not self._log:
+            return
+        for tool_name, args, result in reversed(self._log):
+            builder = COMPENSATION_MAP.get(tool_name)
+            if builder is None:
+                continue
+            try:
+                compensation = builder(args, result)
+                if compensation is None:
+                    continue
+                inv_tool, inv_args = compensation
+                # 若任意必填参数为 None，则跳过（无法安全回滚）
+                if any(v is None for v in inv_args.values()):
+                    print(
+                        f"  [rollback skip] {tool_name}: 缺少必要参数 {inv_args}",
+                        file=sys.stderr,
+                    )
+                    continue
+                _call_tool_sync_impl(inv_tool, inv_args)
+            except Exception as e:
+                print(f"  [rollback warn] {tool_name} → {e}", file=sys.stderr)
+        self._log.clear()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 3. 虚拟 mcp_client 模块注入（供 exec() 内的脚本导入）
+# ──────────────────────────────────────────────────────────────────────────────
+
 _mcp_client_mod = _types.ModuleType("mcp_completion.mcp_client")
-_mcp_client_mod.call_tool_sync = _call_tool_sync_impl  # type: ignore
+_mcp_client_mod.call_tool_sync = _call_tool_sync_compat  # type: ignore
 sys.modules.setdefault("mcp_completion", _types.ModuleType("mcp_completion"))
 sys.modules["mcp_completion.mcp_client"] = _mcp_client_mod
 
 
-def _call_tool_sync_compat(tool_name_or_server: str, tool_args_or_name=None, tool_args_3rd=None):
-    """
-    兼容两种用法：
-    - call_tool_sync(tool_name, args)         → 直接调用（两参数）
-    - call_tool_sync(server, tool_name, args) → 合并为 "server_tool_name"（三参数）
-    """
-    if tool_args_3rd is not None:
-        # 三参数: (server, tool_name, args)
-        full_name = f"{tool_name_or_server}_{tool_args_or_name}"
-        return _call_tool_sync_impl(full_name, tool_args_3rd)
-    # 两参数: (tool_name, args)
-    return _call_tool_sync_impl(tool_name_or_server, tool_args_or_name or {})
+# ──────────────────────────────────────────────────────────────────────────────
+# 4. 单任务 GT 执行
+# ──────────────────────────────────────────────────────────────────────────────
 
+def run_one_gt_script(
+    task: dict,
+    task_index: int,
+    verbose: bool = False,
+    rollback: bool = True,
+) -> Tuple[dict, bool]:
+    """执行 ground_truth.dynamic_reference_script 中的 generate_reference_answer()。
 
-def run_one_gt_script(task: dict, task_index: int, verbose: bool = False) -> Tuple[dict, bool]:
-    """
-    对单条任务执行 ground_truth.dynamic_reference_script 中的 generate_reference_answer()。
+    执行完毕（成功或失败）后自动回滚写操作（除非 rollback=False）。
     返回 (更新后的 task 字典, 是否成功)。
     """
     out = dict(task)
@@ -108,95 +235,86 @@ def run_one_gt_script(task: dict, task_index: int, verbose: bool = False) -> Tup
     out.setdefault("gt_execution_ok", False)
 
     gt = task.get("ground_truth") or {}
-    strategy = gt.get("strategy")
     script_src = (gt.get("dynamic_reference_script") or "").strip()
 
-    if strategy != "dynamic_script" or not script_src:
+    if gt.get("strategy") != "dynamic_script" or not script_src:
         out["gt_execution_error"] = "skip: no dynamic_script or empty script"
         return out, False
 
-    # 执行脚本：在独立 namespace 中 exec，再调用 generate_reference_answer()
-    # 把 call_tool_sync 替换为兼容版（支持两参/三参）
-    # 同时注入 call_tool（老式两参/三参写法），让各种脚本都能找到正确实现。
-    _original_call_tool_sync = _mcp_client_mod.call_tool_sync
-    _mcp_client_mod.call_tool_sync = _call_tool_sync_compat
+    registry = CompensationRegistry(enabled=rollback)
 
-    # 同步注入虚拟的 mcp_client 模块（脚本内 "from mcp_client import call_tool" 需要）
-    import types as _t
-    _mcp_client_simple = _t.ModuleType("mcp_client")
-    _mcp_client_simple.call_tool = _call_tool_sync_compat       # call_tool 别名
-    _mcp_client_simple.call_tool_sync = _call_tool_sync_compat  # call_tool_sync 别名
+    def _tracked_compat(tool_name_or_server, tool_args_or_name=None, tool_args_3rd=None):
+        if tool_args_3rd is not None:
+            full_name = f"{tool_name_or_server}_{tool_args_or_name}"
+            return registry.tracked_call(full_name, tool_args_3rd)
+        return registry.tracked_call(tool_name_or_server, tool_args_or_name or {})
+
+    # 注入轻量 mcp_client 模块（兼容 "from mcp_client import call_tool" 写法）
+    _mcp_client_simple = _types.ModuleType("mcp_client")
+    _mcp_client_simple.call_tool = _tracked_compat        # type: ignore
+    _mcp_client_simple.call_tool_sync = _tracked_compat   # type: ignore
     sys.modules["mcp_client"] = _mcp_client_simple
 
-    namespace = {
+    namespace: Dict[str, Any] = {
         "__builtins__": __builtins__,
         "json": json,
-        # 直接在 namespace 注入，让脚本里裸用 call_tool / call_tool_sync 也能工作
-        "call_tool": _call_tool_sync_compat,
-        "call_tool_sync": _call_tool_sync_compat,
+        "call_tool": _tracked_compat,
+        "call_tool_sync": _tracked_compat,
     }
+
     try:
         exec(script_src, namespace)
     except Exception as e:
-        _mcp_client_mod.call_tool_sync = _original_call_tool_sync
         out["gt_execution_error"] = f"exec script failed: {e}"
         if verbose:
             traceback.print_exc()
+        registry.rollback()
+        sys.modules.pop("mcp_client", None)
         return out, False
 
     fn = namespace.get("generate_reference_answer")
     if not callable(fn):
-        _mcp_client_mod.call_tool_sync = _original_call_tool_sync
         out["gt_execution_error"] = "generate_reference_answer not found or not callable"
+        registry.rollback()
+        sys.modules.pop("mcp_client", None)
         return out, False
 
     try:
         result = fn()
-        out["gt_execution_log"] = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+        out["gt_execution_log"] = (
+            result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+        )
         out["gt_execution_ok"] = True
         out["gt_execution_error"] = None
         return out, True
     except Exception as e:
         out["gt_execution_error"] = str(e)
-        out["gt_execution_log"] = None
         if verbose:
             traceback.print_exc()
         return out, False
     finally:
-        # 恢复 mcp_completion.mcp_client 中的 call_tool_sync
-        _mcp_client_mod.call_tool_sync = _original_call_tool_sync
-        # 清理临时注入的 mcp_client 简单模块，避免污染全局 sys.modules
+        registry.rollback()
         sys.modules.pop("mcp_client", None)
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# 5. CLI 入口
+# ──────────────────────────────────────────────────────────────────────────────
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Run generate_reference_answer() from generated task jsonl and write results to a new file."
+        description="对生成任务执行 generate_reference_answer() 并写出 GT 结果 JSONL。"
     )
+    parser.add_argument("--input", required=True, help="输入 JSONL 文件路径")
     parser.add_argument(
-        "--input",
-        required=True,
-        help="Input jsonl path (e.g. task_generation/tasks/reasoning_generated_tasks.jsonl or tasks/reasoning_generated_tasks.jsonl)",
+        "--output", required=True,
+        help="输出 JSONL 文件路径（每行新增 gt_execution_log / gt_execution_error / gt_execution_ok）",
     )
-    parser.add_argument(
-        "--output",
-        required=True,
-        help="Output jsonl path; each line = same as input + gt_execution_log, gt_execution_error, gt_execution_ok",
-    )
-    parser.add_argument(
-        "--limit",
-        type=int,
-        default=None,
-        help="Max number of tasks to process (default: all)",
-    )
-    parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="打印每条任务失败时的完整 traceback，用于调试脚本错误",
-    )
+    parser.add_argument("--limit", type=int, default=None, help="只处理前 N 条任务")
+    parser.add_argument("--no-rollback", action="store_true", help="禁用写操作补偿回滚")
+    parser.add_argument("--verbose", action="store_true", help="打印失败任务的完整 traceback")
     args = parser.parse_args()
 
-    # 相对路径均相对于当前工作目录解析
     input_path = Path(args.input)
     if not input_path.is_absolute():
         input_path = Path.cwd() / args.input
@@ -208,7 +326,7 @@ def main():
     if not output_path.is_absolute():
         output_path = Path.cwd() / args.output
 
-    tasks = []
+    tasks: List[dict] = []
     with open(input_path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -222,21 +340,24 @@ def main():
     if args.limit is not None:
         tasks = tasks[: args.limit]
 
+    rollback_enabled = not args.no_rollback
     print(f"Processing {len(tasks)} tasks from {input_path}")
     print(f"Output: {output_path}")
-    print("(Ensure MCP_SERVER_URL / sandbox is reachable if scripts call call_tool_sync)")
+    print(f"Rollback: {'enabled' if rollback_enabled else 'disabled'}")
 
     results = []
     ok_count = 0
     for i, task in enumerate(tasks):
-        out, ok = run_one_gt_script(task, i, verbose=args.verbose)
+        out, ok = run_one_gt_script(task, i, verbose=args.verbose, rollback=rollback_enabled)
         results.append(out)
         if ok:
             ok_count += 1
-            print(f"  [{i+1}/{len(tasks)}] OK  (bucket={task.get('bucket')}, difficulty={task.get('difficulty')})")
+            print(
+                f"  [{i+1}/{len(tasks)}] OK  "
+                f"(bucket={task.get('bucket')}, difficulty={task.get('difficulty')})"
+            )
         else:
             err = out.get("gt_execution_error") or "unknown"
-            # 非 verbose 模式只显示前 120 字符，verbose 模式已在函数内打印完整 traceback
             print(f"  [{i+1}/{len(tasks)}] FAIL: {err[:120]}")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
