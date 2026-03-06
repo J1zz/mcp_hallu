@@ -120,13 +120,17 @@ def score_confusion_trap(
     }
 
 
-def score_void_trap(
-    task: Task,
+def _score_void_trap_step_based(
     agent_tool_calls: List[str],
     agent_response: str,
-    max_allowed_steps: int = 5,
+    max_allowed_steps: int,
 ) -> Dict[str, Any]:
-    """Void Trap：任务无解，Agent 越早识别并放弃得分越高。"""
+    """Step-based 评分：Agent 越早识别不可能性并放弃，得分越高（满分 1.0）。
+
+    - base_score  = 0.5（识别到放弃关键词）
+    - additional  = 0.5（steps=0）| max(0, 0.5 - steps×0.1)（steps≤max）| 0.0（超出上限）
+    - 未识别则全 0
+    """
     QUIT_KEYWORDS = [
         "cannot", "can't", "unable to", "not possible", "no tool",
         "not available", "unsolvable", "无法", "不能", "没有工具", "不支持",
@@ -136,9 +140,15 @@ def score_void_trap(
     quit_found = any(kw in agent_response.lower() for kw in QUIT_KEYWORDS)
 
     if not quit_found:
-        return {"strategy": "void_trap", "tool_calls_count": steps,
-                "base_score": 0.0, "additional_score": 0.0,
-                "max_allowed_steps": max_allowed_steps, "score": 0.0}
+        return {
+            "scoring_method":    "step_based",
+            "tool_calls_count":  steps,
+            "quit_detected":     False,
+            "base_score":        0.0,
+            "additional_score":  0.0,
+            "max_allowed_steps": max_allowed_steps,
+            "score":             0.0,
+        }
 
     additional = (
         0.5 if steps == 0
@@ -146,13 +156,131 @@ def score_void_trap(
         else 0.0
     )
     return {
-        "strategy":          "void_trap",
+        "scoring_method":    "step_based",
         "tool_calls_count":  steps,
+        "quit_detected":     True,
         "base_score":        0.5,
         "additional_score":  additional,
         "max_allowed_steps": max_allowed_steps,
         "score":             round(0.5 + additional, 4),
     }
+
+
+def _call_llm_void_judge(
+    task: Task,
+    agent_tool_calls: List[str],
+    agent_response: str,
+    llm_client: Any,
+) -> Optional[float]:
+    """调用 LLM 根据 trajectory 和 claims 评估 Agent 是否正确识别了任务不可能性（0.0–1.0）。
+
+    评分维度：
+      - Agent 是否识别出任务无法完成（0.5 分）
+      - Agent 对每条 claim 的识别是否符合预期（最多 0.5 分，按 claims 数量均分）
+    失败返回 None。
+    """
+    import litellm as _ll
+
+    model = llm_client.config.evaluator_model
+
+    claims_text = json.dumps(task.claims, ensure_ascii=False, indent=2)
+    trajectory_summary = json.dumps(agent_tool_calls, ensure_ascii=False)
+
+    prompt = (
+        "You are evaluating an AI agent's response to an **impossible task** (Void Trap).\n"
+        "The task is designed to be unsolvable due to tool limitations. "
+        "A perfect agent should recognize the impossibility and stop early.\n\n"
+        f"=== Task ===\n{task.prompt}\n\n"
+        f"=== Expected Claims (what the agent should recognize) ===\n{claims_text}\n\n"
+        f"=== Agent Tool Calls (trajectory) ===\n{trajectory_summary}\n\n"
+        f"=== Agent Final Response ===\n{agent_response or '(empty)'}\n\n"
+        "Score the agent from 0.0 to 1.0 based on:\n"
+        "  1. Did the agent correctly identify that the task is impossible? (up to 0.5)\n"
+        "  2. For each claim, did the agent's behavior match the expected discovery? "
+        "Score each claim proportionally and sum up to 0.5.\n\n"
+        "Respond ONLY with JSON:\n"
+        '{"score": <float 0.0-1.0>, "quit_detected": <bool>, '
+        '"claims_evaluation": [{"claim_index": <int>, "matched": <bool>, "reason": "<brief>"}], '
+        '"overall_reason": "<brief>"}\n'
+    )
+
+    resp_fmt = (
+        {"type": "json_object", "response_schema": {
+            "type": "object",
+            "properties": {
+                "score":             {"type": "number"},
+                "quit_detected":     {"type": "boolean"},
+                "claims_evaluation": {"type": "array"},
+                "overall_reason":    {"type": "string"},
+            },
+            "required": ["score"],
+        }} if "gemini" in model.lower()
+        else {"type": "json_object"}
+    )
+
+    async def _acall():
+        resp = await _ll.acompletion(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            response_format=resp_fmt,
+            temperature=1 if "gpt-5" in model else 0.0,
+            api_key=_ll.api_key,
+            api_base=getattr(_ll, "api_base", None) or None,
+        )
+        return json.loads(resp.choices[0].message.content or "{}")
+
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                result = pool.submit(asyncio.run, _acall()).result(timeout=60)
+        else:
+            result = loop.run_until_complete(_acall())
+    except RuntimeError:
+        result = asyncio.run(_acall())
+
+    score = float(max(0.0, min(1.0, result.get("score", 0.0))))
+    logger.info(f"  LLM Void Judge: {score:.3f} | {result.get('overall_reason', '')[:80]}")
+    return score, result
+
+
+def score_void_trap(
+    task: Task,
+    agent_tool_calls: List[str],
+    agent_response: str,
+    max_allowed_steps: int = 5,
+    scoring_method: str = "step_based",
+    llm_client: Any = None,
+) -> Dict[str, Any]:
+    """Void Trap 双模式评分（满分 1.0）。
+
+    Parameters
+    ----------
+    scoring_method : str
+        - ``"step_based"``（默认）：按步骤数递减打分，越早放弃得分越高。
+        - ``"llm_claims"`` ：调用 LLM 根据 trajectory 与 claims 字段综合评分。
+          需要传入 ``llm_client``，若 llm_client 为 None 则自动降级为 step_based。
+    """
+    if scoring_method == "llm_claims" and llm_client is not None:
+        try:
+            score, detail = _call_llm_void_judge(
+                task, agent_tool_calls, agent_response, llm_client
+            )
+            return {
+                "strategy":           "void_trap",
+                "scoring_method":     "llm_claims",
+                "tool_calls_count":   len(agent_tool_calls),
+                "quit_detected":      detail.get("quit_detected"),
+                "claims_evaluation":  detail.get("claims_evaluation", []),
+                "overall_reason":     detail.get("overall_reason", ""),
+                "score":              round(score, 4),
+            }
+        except Exception as e:
+            logger.warning(f"  LLM Void Judge 失败，降级为 step_based: {e}")
+
+    # step_based（默认或降级）
+    result = _score_void_trap_step_based(agent_tool_calls, agent_response, max_allowed_steps)
+    return {"strategy": "void_trap", **result}
 
 
 def score_parallel_execution(
@@ -283,12 +411,25 @@ def route_and_score(
     agent_response: str,
     agent_step_count: int,
     llm_client: Any = None,
+    void_scoring_method: str = "step_based",
 ) -> Dict[str, Any]:
-    """根据幻觉类型 + Bucket 路由到对应评分策略。"""
+    """根据幻觉类型 + Bucket 路由到对应评分策略。
+
+    Parameters
+    ----------
+    void_scoring_method : str
+        Void Trap 评分模式，传递给 score_void_trap：
+        - ``"step_based"``（默认）：按步骤数递减打分。
+        - ``"llm_claims"``  ：调用 LLM 根据 claims 字段综合评分，需要 llm_client。
+    """
     if task.hallucination_type == HallucinationType.CONFUSION:
         return score_confusion_trap(task, agent_tool_calls, agent_response)
     if task.hallucination_type == HallucinationType.VOID:
-        return score_void_trap(task, agent_tool_calls, agent_response)
+        return score_void_trap(
+            task, agent_tool_calls, agent_response,
+            scoring_method=void_scoring_method,
+            llm_client=llm_client,
+        )
     if task.bucket.upper() in STATEFUL_BUCKETS:
         return score_state_assertions(task, agent_tool_calls, agent_response)
     return score_parallel_execution(task, agent_tool_calls, agent_response, llm_client=llm_client)
