@@ -1,5 +1,6 @@
 """主评测流程：LLM Judge 客户端、评分循环、报告输出、完整 pipeline。"""
 
+import importlib.util
 import json
 import logging
 import os
@@ -52,7 +53,7 @@ def evaluate_from_completion_csv(
     output_csv_path: str,
     pass_threshold: float = 0.6,
 ) -> pd.DataFrame:
-    logger.info(f"加载 completion CSV: {completion_csv_path}")
+    logger.info(f"Loading completion CSV: {completion_csv_path}")
     df    = pd.read_csv(completion_csv_path)
     tasks = build_tasks_from_completion_csv(df)
     llm   = build_llm_judge_client()
@@ -142,7 +143,7 @@ async def run_full_pipeline(
     num_tasks: Optional[int] = None,
     pass_threshold: float = 0.6,
 ) -> pd.DataFrame:
-    """端到端流程：JSONL → Agent 执行 → 幻觉评分 → 输出 CSV。"""
+    """End-to-end pipeline: JSONL → Agent execution → Hallucination scoring → Output CSV."""
     import importlib.util
 
     tasks = load_tasks_from_jsonl(jsonl_path)
@@ -153,9 +154,7 @@ async def run_full_pipeline(
     tasks_df = tasks_to_csv(tasks, tmp_csv)
 
     # 使用绝对路径避免 chdir 后相对路径不在预期目录
-    completion_csv_path = Path(output_csv).with_name(
-        Path(output_csv).stem + "_completion.csv"
-    ).resolve()
+    completion_csv_path = Path(output_csv).with_name(Path(output_csv).stem + "_completion.csv").resolve()
     completion_csv_path.parent.mkdir(parents=True, exist_ok=True)
 
     orig_cwd = os.getcwd()
@@ -165,17 +164,13 @@ async def run_full_pipeline(
         (MCP_ATLAS_EVAL_DIR / "completion_results").mkdir(exist_ok=True)
         completion_csv_path.unlink(missing_ok=True)
 
-        spec = importlib.util.spec_from_file_location(
-            "mcp_completion_script", MCP_ATLAS_EVAL_DIR / "mcp_completion_script.py"
-        )
+        spec = importlib.util.spec_from_file_location("mcp_completion_script", MCP_ATLAS_EVAL_DIR / "mcp_completion_script.py")
         mcp_mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mcp_mod)
         mcp_mod.SERVER_URL = server_url
 
         async with mcp_mod.AsyncMCPTrajectoryGenerator(model) as gen:
-            await gen.evaluate_dataset_async(
-                tasks_df, str(completion_csv_path), None, concurrency
-            )
+            await gen.evaluate_dataset_async(tasks_df, str(completion_csv_path), None, concurrency)
 
     except Exception as e:
         logger.error(f"Agent 执行失败: {e}，将以空轨迹评分")
