@@ -24,11 +24,12 @@
 import argparse
 import json
 import os
+import re
 import sys
 import traceback
 import requests
 from pathlib import Path
-from typing import Tuple
+from typing import Any, Tuple
 
 # ── MCP Server 地址（1984 端口为工具执行环境）────────────────────────────────
 # 优先读取环境变量，默认指向本地 1984 端口
@@ -38,30 +39,164 @@ MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:1984")
 # run_gt_execution.py 需要在 dynamic_reference_script 执行期间调用真实工具。
 # 通过 HTTP 调用 1984 端口的 /call-tool 接口实现，无需依赖 mcp_completion 包。
 
-def _call_tool_sync_impl(tool_name: str, tool_args: dict) -> str:
+def _parse_tool_response(raw: Any) -> Any:
     """
-    同步调用 MCP Server（1984 端口）执行工具，返回结果字符串。
+    将工具返回的任意格式统一适配为 Python 对象（dict/list）或原始字符串。
+
+    适配规则（按优先级）：
+    1. 已是 dict/list → 直接返回
+    2. 字符串尝试 JSON 解析 → 成功则返回解析结果
+    3. 字符串内嵌 JSON（如 Markdown 代码块里的 JSON）→ 提取并解析
+    4. 纯文本（Markdown、自然语言等）→ 包装为 {"text": "...", "_raw_text": True} 返回
+
+    这样脚本里的 json.loads() / .get() 均不会抛出 JSONDecodeError。
+    """
+    # 已是结构化对象，直接返回
+    if isinstance(raw, (dict, list)):
+        return raw
+
+    if not isinstance(raw, str):
+        # 其他类型（int/None 等）也包装一下
+        return {"value": raw, "_raw_text": False}
+
+    text = raw.strip()
+
+    # 尝试直接 JSON 解析
+    if text and text[0] in ('{', '[', '"', 't', 'f', 'n') or (text and text[0].isdigit()):
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+
+    # 尝试从 Markdown 代码块中提取 JSON
+    #   ```json\n{...}\n```  或  ```\n{...}\n```
+    md_json_pattern = re.compile(
+        r'```(?:json)?\s*\n?([\s\S]*?)\n?```',
+        re.IGNORECASE
+    )
+    for match in md_json_pattern.finditer(text):
+        candidate = match.group(1).strip()
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            pass
+
+    # 兜底：纯文本，包装为带 text 字段的 dict，让脚本可以安全 .get()
+    return {"text": text, "_raw_text": True}
+
+
+# ── 需要将参数包裹在 params key 下的工具前缀 ─────────────────────────────────
+# 这些工具的 inputSchema 要求 tool_args = {"params": {实际参数}}
+# LLM 生成的脚本通常直接平铺参数，此处自动适配。
+_TOOLS_NEEDING_PARAMS_WRAP = frozenset({
+    "twelvedata_GetApiUsage", "twelvedata_GetCommodities", "twelvedata_GetCrossListings",
+    "twelvedata_GetCryptocurrencies", "twelvedata_GetCryptocurrencyExchanges",
+    "twelvedata_GetCurrencyConversion", "twelvedata_GetDividends",
+    "twelvedata_GetEarliestTimestamp", "twelvedata_GetEarnings", "twelvedata_GetEod",
+    "twelvedata_GetEtf", "twelvedata_GetExchangeRate", "twelvedata_GetExchanges",
+    "twelvedata_GetForexPairs", "twelvedata_GetFunds", "twelvedata_GetIpoCalendar",
+    "twelvedata_GetLogo", "twelvedata_GetMarketState", "twelvedata_GetPrice",
+    "twelvedata_GetProfile", "twelvedata_GetQuote", "twelvedata_GetSplits",
+    "twelvedata_GetStatistics", "twelvedata_GetStocks", "twelvedata_GetSymbolSearch",
+    "twelvedata_GetTechnicalIndicators", "twelvedata_GetTimeSeries",
+    "twelvedata_GetTimeSeriesAdx", "twelvedata_GetTimeSeriesAtr",
+    "twelvedata_GetTimeSeriesBBands", "twelvedata_GetTimeSeriesCross",
+    "twelvedata_GetTimeSeriesEma", "twelvedata_GetTimeSeriesMacd",
+    "twelvedata_GetTimeSeriesRsi", "twelvedata_GetTimeSeriesSma",
+})
+
+# ── 文件路径相关工具：沙箱只允许 /data 目录，自动将其他路径重定向 ──────────────
+_FILE_PATH_TOOLS = frozenset({
+    "desktop-commander_read_file", "desktop-commander_write_file",
+    "desktop-commander_create_directory", "desktop-commander_move_file",
+    "filesystem_read_file", "filesystem_read_text_file", "filesystem_write_file",
+    "filesystem_get_file_info", "filesystem_move_file", "filesystem_edit_file",
+    "filesystem_create_directory", "filesystem_read_multiple_files",
+    "filesystem_directory_tree", "filesystem_list_directory",
+    "filesystem_list_directory_with_sizes", "filesystem_search_files",
+})
+
+# 沙箱允许的根目录
+_SANDBOX_ALLOWED_ROOT = "/data"
+
+# 脚本中常见的、但沙箱不允许的路径前缀（按优先级匹配）
+_REDIRECT_PATH_PREFIXES = [
+    "/project/", "/projects/",
+    "/var/log/", "/var/",
+    "/tmp/", "/temp/",
+    "/home/", "/root/",
+    "/etc/",
+    "/app/", "/apps/",
+    "/workspace/", "/workspaces/",
+    "/src/", "/source/",
+]
+
+
+def _adapt_tool_args(tool_name: str, tool_args: dict) -> dict:
+    """
+    对工具参数进行运行时适配，解决 LLM 生成脚本与真实 Server 规范之间的差异：
+
+    1. params 包裹适配：
+       某些工具（如所有 twelvedata_* 工具）要求参数包裹在 {"params": {...}} 中。
+       若 tool_args 中没有 params key，自动添加包裹。
+
+    2. 文件路径重定向：
+       沙箱文件系统只允许访问 /data 目录。
+       若 tool_args 中的 path 字段指向不允许的目录（/project, /var, /tmp 等），
+       自动将路径前缀替换为 /data，使脚本可以正常执行（读到的内容可能为空，但不会崩溃）。
+    """
+    adapted = dict(tool_args)
+
+    # 1. params 包裹适配
+    if tool_name in _TOOLS_NEEDING_PARAMS_WRAP and "params" not in adapted:
+        adapted = {"params": adapted}
+        return adapted  # 包裹后无需再做路径适配
+
+    # 2. 文件路径重定向
+    if tool_name in _FILE_PATH_TOOLS:
+        for path_key in ("path", "source", "destination", "src", "dst"):
+            val = adapted.get(path_key)
+            if isinstance(val, str) and not val.startswith(_SANDBOX_ALLOWED_ROOT):
+                for prefix in _REDIRECT_PATH_PREFIXES:
+                    if val.startswith(prefix):
+                        rel = val[len(prefix):]
+                        adapted[path_key] = f"{_SANDBOX_ALLOWED_ROOT}/{rel}"
+                        break
+                else:
+                    # 兜底：若路径不以 /data 开头也不匹配任何前缀，强制加 /data 前缀
+                    if val.startswith("/") and not val.startswith(_SANDBOX_ALLOWED_ROOT):
+                        adapted[path_key] = _SANDBOX_ALLOWED_ROOT + val
+
+    return adapted
+
+
+def _call_tool_sync_impl(tool_name: str, tool_args: dict) -> Any:
+    """
+    同步调用 MCP Server（1984 端口）执行工具。
 
     接口：POST {MCP_SERVER_URL}/call-tool
     Body：{"tool_name": "...", "tool_args": {...}}
-    返回：工具结果的 JSON 字符串（或原始文本）
+    返回：经过格式适配的 Python 对象（dict/list）或原始字符串。
+      - 若工具返回 JSON → 解析后的 dict/list
+      - 若工具返回 Markdown/纯文本 → {"text": "...", "_raw_text": True}
 
     需要 MCP Server 处于运行状态。
     """
+    # 运行时参数适配（params 包裹 + 路径重定向）
+    tool_args = _adapt_tool_args(tool_name, tool_args)
     url = f"{MCP_SERVER_URL}/call-tool"
     payload = {"tool_name": tool_name, "tool_args": tool_args}
     try:
         resp = requests.post(url, json=payload, timeout=60)
         resp.raise_for_status()
-        # 返回原始内容字符串，与 dynamic_reference_script 里的 json.loads() 兼容
         data = resp.json()
         # 兼容两种响应格式：
         #   1. {"content": [{"type":"text","text":"..."}]}  ← sandbox_client 格式
         #   2. 直接是结果对象
         if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
-            text = data[0].get("text", json.dumps(data))
-            return text
-        return json.dumps(data) if not isinstance(data, str) else data
+            raw_text = data[0].get("text", json.dumps(data))
+            return _parse_tool_response(raw_text)
+        return _parse_tool_response(data)
     except requests.exceptions.ConnectionError:
         raise RuntimeError(
             f"无法连接到 MCP Server ({url})。"
@@ -71,6 +206,40 @@ def _call_tool_sync_impl(tool_name: str, tool_args: dict) -> str:
         raise RuntimeError(f"工具调用超时（60s）：{tool_name}")
     except Exception as e:
         raise RuntimeError(f"工具调用失败 {tool_name}: {e}")
+
+
+# ── 智能 json 模块：注入到脚本 namespace，让 json.loads() 不再崩溃 ─────────────
+# dynamic_reference_script 里大量写了 json.loads(raw) 来解析工具返回值。
+# 现在工具返回值已由 _parse_tool_response 处理过，绝大多数情况已是 dict/list；
+# 但脚本里仍可能对 dict/list 再次调用 json.loads()（如 json.loads(result) 而 result 已是 dict）。
+# _make_smart_json 返回的对象：
+#   - json.loads(x)：若 x 已是 dict/list 直接返回；若是字符串调用 _parse_tool_response 适配
+#   - json.dumps / json.dump 等其他方法保持原样
+
+import types as _json_wrapper_types
+
+def _make_smart_json():
+    """返回一个行为与标准 json 模块相同、但 loads() 对非 JSON 内容宽容的对象。"""
+    mod = _json_wrapper_types.ModuleType("json")
+    # 拷贝所有标准 json 属性
+    for attr in dir(json):
+        if not attr.startswith("__"):
+            setattr(mod, attr, getattr(json, attr))
+
+    def _smart_loads(s, **kwargs):
+        # 已是 dict/list（call_tool 返回的已适配对象），直接返回
+        if isinstance(s, (dict, list)):
+            return s
+        # 字符串：先尝试标准解析，失败则走 _parse_tool_response 适配
+        if isinstance(s, (bytes, bytearray)):
+            s = s.decode(kwargs.pop("encoding", "utf-8"), errors="replace")
+        try:
+            return json.loads(s, **kwargs)
+        except (json.JSONDecodeError, TypeError):
+            return _parse_tool_response(s)
+
+    mod.loads = _smart_loads
+    return mod
 
 
 # ── 虚拟的 mcp_client 模块对象，供猴子补丁使用 ───────────────────────────────
@@ -130,7 +299,7 @@ def run_one_gt_script(task: dict, task_index: int, verbose: bool = False) -> Tup
 
     namespace = {
         "__builtins__": __builtins__,
-        "json": json,
+        "json": _make_smart_json(),
         # 直接在 namespace 注入，让脚本里裸用 call_tool / call_tool_sync 也能工作
         "call_tool": _call_tool_sync_compat,
         "call_tool_sync": _call_tool_sync_compat,

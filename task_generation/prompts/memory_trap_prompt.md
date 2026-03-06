@@ -158,6 +158,11 @@ Before generating, verify:
       - 完整工具名 = `available_tools` 列表中的名称（如 `"osm-mcp-server_geocode_address"`）
       - ❌ 禁止三参数写法：`call_tool('server', 'tool', args)`
       - ✅ 正确写法：`call_tool('osm-mcp-server_geocode_address', {'address': 'Empire State Building'})`
+    - **⚠️ 文件路径（CRITICAL）**：
+      - 文件系统沙箱**只允许访问 `/data` 目录**，禁止使用任何其他路径
+      - ❌ 禁止路径：`/tmp/`、`/var/`、`/project/`、`/home/`、`/etc/`、`/root/`、`/app/`、`/workspace/`、`/src/`
+      - ✅ 正确路径：`/data/filename.txt`、`/data/subdir/file.json`
+      - 涉及文件读写的所有工具（`desktop-commander_read_file`、`filesystem_write_file` 等）的 `path` 参数**必须以 `/data/` 开头**
     - **⚠️ 字段访问（CRITICAL）**：
       - ❌ 禁止直接索引：`data['field']`（字段不存在时会 KeyError 崩溃）
       - ✅ 必须防御性访问：`data.get('field', default_value)`
@@ -294,4 +299,5 @@ Generate a SINGLE JSON object strictly following this schema:
 - [ ] Ground truth script demonstrates long chain and memory
 - [ ] `dynamic_reference_script` 中所有 `call_tool` 均使用**两参数**格式：`call_tool("完整工具名", {参数dict})`，工具名来自 `available_tools` 列表，❌ 禁止 `call_tool('server', 'tool', args)` 三参数写法
 - [ ] `dynamic_reference_script` 中所有字段访问均使用 `.get()` 防御性写法，❌ 禁止 `data['field']` 直接索引
+- [ ] `dynamic_reference_script` 中所有文件路径均以 `/data/` 开头，❌ 禁止使用 `/tmp/`、`/var/`、`/project/`、`/home/` 等沙箱外路径
 
