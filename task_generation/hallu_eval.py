@@ -32,7 +32,6 @@ logger = logging.getLogger(__name__)
 
 def _parse_args():
     p = argparse.ArgumentParser(
-        description="hallu_eval.py — 幻觉类型感知的 MCP Agent 评测框架",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -70,23 +69,15 @@ def main():
 
     # 完整流程
     if not args.input:
-        logger.error("请指定 --input 或 --from-completion-csv")
+        logger.error("Please specify --input or --from-completion-csv")
         sys.exit(1)
 
-    check = load_tasks_from_jsonl(args.input)
+    all_tasks = load_tasks_from_jsonl(args.input)
     if args.num_tasks:
-        check = check[:args.num_tasks]
-    missing = [
-        t for t in check
-        if t.hallucination_type in (HallucinationType.MEMORY, HallucinationType.REASONING)
-        and not t.gt_execution_ok
-    ]
+        all_tasks = all_tasks[:args.num_tasks]
+    missing = [ t for t in all_tasks if t.hallucination_type in (HallucinationType.MEMORY, HallucinationType.REASONING) and not t.gt_execution_ok ]
     if missing:
-        print(
-            f"\n⚠  {len(missing)} 条 Memory/Reasoning Trap 任务缺少 gt_execution_log，"
-            f"语义匹配将退化为关键词匹配。\n"
-            f"建议先运行：uv run hallu-gt --input {args.input} --output <with_gt.jsonl>"
-        )
+        print(f"\n⚠  {len(missing)} 条 Memory/Reasoning Trap 任务缺少 gt_execution_log，语义匹配将退化为关键词匹配.\n")
 
     asyncio.run(run_full_pipeline(
         jsonl_path=args.input,

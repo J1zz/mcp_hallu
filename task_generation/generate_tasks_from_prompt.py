@@ -89,16 +89,13 @@ def extract_json_from_response(text: str) -> dict | None:
     """从模型响应中提取 JSON 对象（兼容 Gemini 多行代码块输出）"""
     if not text or not text.strip():
         return None
-
     text = text.strip()
 
-    # 1. 尝试直接解析（OpenAI json_object 模式或模型直接输出 JSON）
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
 
-    # 2. 提取 ```json ... ``` 或 ``` ... ``` 代码块（贪婪匹配，支持多行嵌套）
     json_pattern = r"```(?:json)?\s*(\{.*\})\s*```"
     matches = re.findall(json_pattern, text, re.DOTALL)
     if matches:
@@ -109,7 +106,6 @@ def extract_json_from_response(text: str) -> dict | None:
             except json.JSONDecodeError:
                 continue
 
-    # 3. 括号平衡扫描：从第一个 { 开始，找到与之匹配的最外层 }
     start = text.find("{")
     if start != -1:
         depth = 0
