@@ -1,14 +1,22 @@
-"""hallu_eval.py 
-推荐流程：
-  # Step 1：预跑 GT（Memory / Reasoning Trap 需要）
+"""hallu_eval.py
+
+推荐流程（根据任务类型选择）：
+
+  ── 情况 A：任务含 Memory Trap / Reasoning Trap（需要预跑 GT）──────────────
+  # Step 1：预跑 GT，将 gt_execution_log 写入新文件
   uv run hallu-gt  --input tasks/reasoning_generated_tasks.jsonl \\
                    --output gt/reasoning_with_gt.jsonl
 
-  # 评测
-  uv run hallu-eval --input tasks/void_tasks.jsonl \
-                    --model gpt-4o-2024-05-13 --output results/eval.csv
+  # Step 2：评测时 --input 传 GT 文件（含 gt_execution_log，启用语义匹配）
+  uv run hallu-eval --input gt/reasoning_with_gt.jsonl \\
+                    --model gpt-4o-2024-05-13 --output results/reasoning_eval.csv
 
-  # 跳过 Agent 执行，对已有 completion CSV 评分
+  ── 情况 B：任务为 Confusion Trap / Void Trap（不需要预跑 GT）──────────────────────────
+  # 直接用原始任务文件评测（无 gt_execution_log，使用规则匹配）
+  uv run hallu-eval --input tasks/confusion_generated_tasks.jsonl \\
+                    --model gpt-4o-2024-05-13 --output results/confusion_eval.csv
+
+  ── 跳过 Agent 执行，对已有 completion CSV 直接评分 ──────────────────────────
   uv run hallu-eval --from-completion-csv completion_results/sample.csv \\
                     --output results/eval.csv
 """
