@@ -90,7 +90,7 @@ _TOOLS_NEEDING_PARAMS_WRAP = frozenset({
     "twelvedata_GetForexPairs", "twelvedata_GetFunds", "twelvedata_GetIpoCalendar",
     "twelvedata_GetLogo", "twelvedata_GetMarketState", "twelvedata_GetPrice",
     "twelvedata_GetProfile", "twelvedata_GetQuote", "twelvedata_GetSplits",
-    "twelvedata_GetStatistics", "twelvedata_GetStocks", "twelvedata_GetSymbolSearch",
+    "twelvedata_GetStocks", "twelvedata_GetSymbolSearch",
     "twelvedata_GetTechnicalIndicators", "twelvedata_GetTimeSeries",
     "twelvedata_GetTimeSeriesAdx", "twelvedata_GetTimeSeriesAtr",
     "twelvedata_GetTimeSeriesBBands", "twelvedata_GetTimeSeriesCross",

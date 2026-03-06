@@ -310,25 +310,37 @@ def score_parallel_execution(
         semantic = _keyword_semantic_match(task, agent_response)
         method   = "keyword_fallback"
 
+    # ── Branch 判断（仅 Reasoning Trap）────────────────────────────────────
+    # 策略：从 gt_log 中提取分支描述行（含 Branch/Path/branch 关键字），
+    # 再检查 agent_response 是否包含该描述中的核心词，避免硬编码分支名称。
     branch_correct = None
-    if task.hallucination_type == HallucinationType.REASONING:
-        gl = gt_log.lower()
-        triggered = (
-            "A" if ("branch a triggered" in gl or "branch_a" in gl) else
-            "B" if ("branch b triggered" in gl or "branch_b" in gl) else None
-        )
-        if triggered:
-            rl = (agent_response or "").lower()
-            branch_correct = (
-                ("branch a" in rl or "more than 5" in rl or ">5" in rl) if triggered == "A"
-                else ("branch b" in rl or "5 or fewer" in rl or "expanded" in rl)
-            )
+    gt_branch_desc = ""
+    if task.hallucination_type == HallucinationType.REASONING and gt_log:
+        import re as _re
+        # 从 gt_log 中找所有含分支信息的行
+        branch_lines = [
+            ln.strip() for ln in gt_log.splitlines()
+            if _re.search(r'\b(branch|path|triggered|sub-branch)\b', ln, _re.IGNORECASE)
+        ]
+        if branch_lines:
+            gt_branch_desc = branch_lines[0]  # 取第一条分支描述作为参考
+            # 提取描述中长度 > 3 的有效词（排除冠词/介词等噪声）
+            STOPWORDS = {"the", "and", "for", "with", "that", "this", "from",
+                         "branch", "path", "triggered", "sub-branch"}
+            keywords = [
+                w.strip(".:,()").lower()
+                for w in gt_branch_desc.split()
+                if len(w.strip(".:,()")) > 3 and w.strip(".:,()").lower() not in STOPWORDS
+            ]
+            if keywords:
+                rl = (agent_response or "").lower()
+                matched = sum(1 for kw in keywords if kw in rl)
+                branch_correct = matched >= max(1, len(keywords) // 2)
 
     branch_w     = 0.1 if task.hallucination_type == HallucinationType.REASONING else 0.0
     branch_score = 1.0 if branch_correct else (0.5 if branch_correct is None else 0.0)
     raw = tool_coverage * 0.4 + semantic * (0.6 - branch_w) + branch_score * branch_w
 
-    gl = gt_log.lower()
     return {
         "strategy":               "parallel_execution",
         "required_tools":         required,
@@ -336,10 +348,7 @@ def score_parallel_execution(
         "tool_coverage":          round(tool_coverage, 4),
         "semantic_match":         round(semantic, 4),
         "semantic_match_method":  method,
-        "branch_triggered_in_gt": (
-            "A" if "branch a triggered" in gl else
-            "B" if "branch b triggered" in gl else "unknown"
-        ),
+        "branch_triggered_in_gt": gt_branch_desc or "unknown",
         "agent_branch_correct":   branch_correct,
         "score":                  round(max(0.0, min(1.0, raw)), 4),
     }
