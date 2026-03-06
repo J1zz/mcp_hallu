@@ -143,6 +143,8 @@ Before generating, verify:
 - [ ] Task doesn't make multiple tools equally valid
 - [ ] Difficulty level matches number of similar tools and complexity
 - [ ] `available_tools` includes ALL tools from servers used in the task (for confusion)
+- [ ] `evaluation_rules.correct_tool` is set to the single correct tool name
+- [ ] `evaluation_rules.forbidden_tools` lists ALL confusion/wrong tools the agent must NOT select
 
 # Step 3: Generate the Task (JSON Output)
 
@@ -166,6 +168,10 @@ Generate a SINGLE JSON object strictly following this schema:
   },
   "evaluation_rules": {
     "required_tools": ["correct_tool_name"],
+    // REQUIRED: The single correct tool the agent MUST select
+    "correct_tool": "correct_tool_name",
+    // REQUIRED: All wrong/confusion tools the agent should NOT select (must be in available_tools)
+    "forbidden_tools": ["wrong_tool_1", "wrong_tool_2"]
   },
   "should_stop_early": false,
   "claims": [
@@ -194,6 +200,8 @@ Generate a SINGLE JSON object strictly following this schema:
 - [ ] Confusion tools can span multiple servers
 - [ ] Differentiation criteria clearly explained
 - [ ] Confusion tools listed in evaluation rules with their servers
+- [ ] `evaluation_rules.correct_tool` is filled with the single correct tool name
+- [ ] `evaluation_rules.forbidden_tools` is filled with all wrong/confusion tool names (non-empty)
 - [ ] `available_tools` includes ALL tools from all servers used (not just required tools)
 - [ ] No ambiguity that makes multiple tools equally valid
 

@@ -30,7 +30,7 @@ uv run python generate_tasks_from_prompt.py \
   --output tasks/all_v2_tasks.jsonl"""
 # 脚本所在目录作为根目录（兼容任意工作目录）
 ROOT = Path(__file__).parent
-TOOLS_FILE = ROOT / "list-tools_bucketed.json"
+TOOLS_FILE = ROOT / "tools_discription/ list-tools_bucketed_readonly.json"
 PROMPTS_DIR = ROOT / "prompts"
 
 # Prompt 文件映射
