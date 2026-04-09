@@ -439,6 +439,11 @@ def route_and_score(
             scoring_method=void_scoring_method,
             llm_client=llm_client,
         )
-    if task.bucket.upper() in STATEFUL_BUCKETS:
+    # 路由依据 ground_truth.strategy，而非 bucket：
+    # - "state_check"    → 有状态操作任务，用断言验证世界状态
+    # - "dynamic_script" → 无状态查询任务，用 LLM Judge 对比 GT 执行日志
+    # 注意：旧逻辑按 bucket（CODING/PRODUCTIVITY）路由会导致 dynamic_script 任务
+    # 的 GT 脚本完全失效，退化为关键词 fallback，因此改为按 strategy 路由。
+    if task.ground_truth.get("strategy") == "state_check":
         return score_state_assertions(task, agent_tool_calls, agent_response)
     return score_parallel_execution(task, agent_tool_calls, agent_response, llm_client=llm_client)
