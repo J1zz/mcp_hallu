@@ -209,11 +209,9 @@ def _call_tool_sync_impl(tool_name: str, tool_args: dict) -> Any:
 #   - json.loads(x)：若 x 已是 dict/list 直接返回；若是字符串调用 _parse_tool_response 适配
 #   - json.dumps / json.dump 等其他方法保持原样
 
-import types as _json_wrapper_types
-
 def _make_smart_json():
     """返回一个行为与标准 json 模块相同、但 loads() 对非 JSON 内容宽容的对象。"""
-    mod = _json_wrapper_types.ModuleType("json")
+    mod = _types.ModuleType("json")
     # 拷贝所有标准 json 属性
     for attr in dir(json):
         if not attr.startswith("__"):
@@ -235,40 +233,6 @@ def _make_smart_json():
     return mod
 
 
-# ── 智能 json 模块：注入到脚本 namespace，让 json.loads() 不再崩溃 ─────────────
-# dynamic_reference_script 里大量写了 json.loads(raw) 来解析工具返回值。
-# 现在工具返回值已由 _parse_tool_response 处理过，绝大多数情况已是 dict/list；
-# 但脚本里仍可能对 dict/list 再次调用 json.loads()（如 json.loads(result) 而 result 已是 dict）。
-# _make_smart_json 返回的对象：
-#   - json.loads(x)：若 x 已是 dict/list 直接返回；若是字符串调用 _parse_tool_response 适配
-#   - json.dumps / json.dump 等其他方法保持原样
-
-import types as _json_wrapper_types
-
-def _make_smart_json():
-    """返回一个行为与标准 json 模块相同、但 loads() 对非 JSON 内容宽容的对象。"""
-    mod = _json_wrapper_types.ModuleType("json")
-    # 拷贝所有标准 json 属性
-    for attr in dir(json):
-        if not attr.startswith("__"):
-            setattr(mod, attr, getattr(json, attr))
-
-    def _smart_loads(s, **kwargs):
-        # 已是 dict/list（call_tool 返回的已适配对象），直接返回
-        if isinstance(s, (dict, list)):
-            return s
-        # 字符串：先尝试标准解析，失败则走 _parse_tool_response 适配
-        if isinstance(s, (bytes, bytearray)):
-            s = s.decode(kwargs.pop("encoding", "utf-8"), errors="replace")
-        try:
-            return json.loads(s, **kwargs)
-        except (json.JSONDecodeError, TypeError):
-            return _parse_tool_response(s)
-
-    mod.loads = _smart_loads
-    return mod
-
-import types as _types
 _mcp_client_mod = _types.ModuleType("mcp_completion.mcp_client")
 _mcp_client_mod.call_tool_sync = _call_tool_sync_impl  # type: ignore
 sys.modules.setdefault("mcp_completion", _types.ModuleType("mcp_completion"))
@@ -480,9 +444,10 @@ def run_one_gt_script(
     namespace: Dict[str, Any] = {
         "__builtins__": __builtins__,
         "json": _make_smart_json(),
-        # 直接在 namespace 注入，让脚本里裸用 call_tool / call_tool_sync 也能工作
-        "call_tool": _call_tool_sync_compat,
-        "call_tool_sync": _call_tool_sync_compat,
+        # 注入带追踪回滚功能的函数，确保脚本里裸用 call_tool / call_tool_sync
+        # 时写操作也会被 registry 记录，可在任务结束后正确回滚
+        "call_tool": _tracked_compat,
+        "call_tool_sync": _tracked_compat,
     }
 
     try:
