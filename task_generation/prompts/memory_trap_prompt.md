@@ -215,7 +215,92 @@ Before generating, verify:
 - **B. 有状态/操作类任务**
   - **strategy**: `state_check`
   - **dynamic_reference_script**: 必须为空字符串 `\"\"`（或保持为空）
-  - **state_assertions**: 必填（用于断言 Agent 执行后的世界/文件/仓库状态）
+  - **state_assertions**: **必填**（不可为空数组！），用于断言 Agent 执行后的世界/文件/仓库状态
+
+  ### state_assertions 格式规范
+
+  `state_assertions` 是一个对象数组，每个对象描述一条可执行的断言：
+
+  ```json
+  {
+    "description": "人类可读的断言描述，说明在验证什么",
+    "code": "可在 Python eval() 中直接执行的表达式，必须返回布尔值",
+    "expected": true
+  }
+  ```
+
+  **字段说明**：
+  - `description`（必填）：说明该断言在验证什么状态，例如 "File /data/output.txt exists and is non-empty"
+  - `code`（必填）：一个纯 Python 表达式字符串，会被 `eval()` 执行，可用变量：
+    - `os`：Python 标准库 `os` 模块（用于文件/目录检查）
+    - `json`：Python 标准库 `json` 模块（用于解析文件内容）
+    - `re`：Python 标准库 `re` 模块（用于正则匹配）
+    - **不可**导入其他模块，**不可**使用 `import` 语句
+  - `expected`（选填，默认 `true`）：`code` 表达式的期望返回值（布尔），若 `code` 结果的布尔值与 `expected` 匹配则断言通过
+
+  **⚠️ 断言代码规则（CRITICAL）**：
+  - ✅ 正确：纯 Python 表达式，`eval()` 可直接执行
+    - `"os.path.exists('/data/output.txt')"`
+    - `"os.path.getsize('/data/output.txt') > 0"`
+    - `"json.loads(open('/data/result.json').read()).get('status') == 'done'"`
+    - `"re.search(r'\\btotal\\b', open('/data/report.txt').read()) is not None"`
+    - `"len(os.listdir('/data/processed/')) >= 3"`
+    - `"'Alice' in open('/data/users.txt').read()"`
+  - ❌ 禁止：`import` 语句、多行代码块、`print()`、赋值语句、`exec()` 嵌套
+  - ❌ 禁止：依赖 `/data` 以外路径的文件（沙箱只能访问 `/data`）
+  - ❌ 禁止：断言只能验证文件内容或目录结构，**不可**调用 MCP 工具
+
+  **断言应覆盖的内容（至少 2-3 条）**：
+  1. **文件/目录存在性**：Agent 是否创建了正确的文件或目录
+  2. **内容正确性**：文件内容是否包含期望的数据/格式
+  3. **副作用验证**：是否修改了正确的状态（如记录条目数、特定字段值）
+
+  **示例（文件操作类任务）**：
+  ```json
+  "state_assertions": [
+    {
+      "description": "Output file /data/report.txt was created",
+      "code": "os.path.exists('/data/report.txt')",
+      "expected": true
+    },
+    {
+      "description": "Report file is non-empty (> 100 bytes)",
+      "code": "os.path.getsize('/data/report.txt') > 100",
+      "expected": true
+    },
+    {
+      "description": "Report contains the word 'summary'",
+      "code": "'summary' in open('/data/report.txt').read().lower()",
+      "expected": true
+    },
+    {
+      "description": "Processed directory contains at least 3 files",
+      "code": "len(os.listdir('/data/processed/')) >= 3",
+      "expected": true
+    }
+  ]
+  ```
+
+  **示例（代码仓库/Git 操作类任务）**：
+  ```json
+  "state_assertions": [
+    {
+      "description": "New file /data/repo/feature.py was created",
+      "code": "os.path.exists('/data/repo/feature.py')",
+      "expected": true
+    },
+    {
+      "description": "feature.py contains the expected function definition",
+      "code": "re.search(r'def\\s+process_data', open('/data/repo/feature.py').read()) is not None",
+      "expected": true
+    },
+    {
+      "description": "config.json has been updated with new_key field",
+      "code": "'new_key' in json.loads(open('/data/repo/config.json').read())",
+      "expected": true
+    }
+  ]
+  ```
 
 Generate a SINGLE JSON object strictly following this schema:
 
@@ -231,9 +316,19 @@ Generate a SINGLE JSON object strictly following this schema:
   // Example: If task uses 'filesystem' and 'database' servers, include ALL tools from both servers
   // Only the tools actually needed for the task should be listed in evaluation_rules.required_tools
   "ground_truth": {
-    "strategy": "dynamic_script",
+    // For STATELESS buckets (not PRODUCTIVITY/CODING): use strategy="dynamic_script"
+    // For STATEFUL buckets (PRODUCTIVITY or CODING): use strategy="state_check"
+    "strategy": "dynamic_script",  // or "state_check" for PRODUCTIVITY/CODING buckets
     "dynamic_reference_script": "def generate_reference_answer():\n    import json\n    from mcp_client import call_tool\n\n    execution_log = []\n\n    # ✅ 调用格式：call_tool('完整工具名', {参数dict})，工具名来自 available_tools 列表\n    # ❌ 禁止三参数写法 call_tool('server', 'tool', args)\n    execution_log.append(\"Step 1: Calling tool 'server_a_tool_a'\")\n    raw1 = call_tool('server_a_tool_a', {'param1': 'value1'})\n    execution_log.append(f\"[RAW] {str(raw1)[:200]}\")\n    step1_data = json.loads(raw1) if isinstance(raw1, str) else raw1\n    execution_log.append(f\"Result sample: {str(step1_data)[:300]}... [truncated]\")\n\n    # 提取信号（防御性访问：用 .get() 不用 data['field']）\n    execution_log.append(\"Step 2: Extracting signal from noisy output...\")\n    items = step1_data.get('items', step1_data if isinstance(step1_data, list) else [])\n    signal = items[0].get('id', 'unknown') if items else 'unknown'\n    execution_log.append(f\"Extracted signal: {signal}\")\n\n    # 更多工具调用\n    execution_log.append(\"Step 3: Calling tool 'server_b_tool_b'\")\n    raw3 = call_tool('server_b_tool_b', {'input': signal})\n    step3_data = json.loads(raw3) if isinstance(raw3, str) else raw3\n    execution_log.append(f\"Step 3 result: {str(step3_data)[:200]}\")\n\n    # 使用提取的信号\n    execution_log.append(f\"Step 5: Using extracted signal '{signal}' from step 2\")\n    raw_final = call_tool('server_c_tool_c', {'id': signal})\n    execution_log.append(f\"Final result: {str(raw_final)[:300]}\")\n\n    return \"\\n\".join(execution_log)",
-    "state_assertions": []
+    // For STATELESS buckets: state_assertions MUST be []
+    // For STATEFUL buckets (PRODUCTIVITY/CODING): state_assertions MUST be non-empty (see format below)
+    // Each assertion is: {"description": "...", "code": "<python eval() expression>", "expected": true/false}
+    // Available in code: os (os module), json (json module), re (re module) — NO imports allowed
+    // Example assertions:
+    //   {"description": "Output file exists", "code": "os.path.exists('/data/output.txt')", "expected": true}
+    //   {"description": "File is non-empty", "code": "os.path.getsize('/data/output.txt') > 0", "expected": true}
+    //   {"description": "JSON field correct", "code": "json.loads(open('/data/result.json').read()).get('status') == 'done'", "expected": true}
+    "state_assertions": []  // MUST be non-empty for PRODUCTIVITY/CODING buckets!
   },
   "evaluation_rules": {
     "required_tools": ["tool1", "tool2", "tool3", "..."],
@@ -300,4 +395,8 @@ Generate a SINGLE JSON object strictly following this schema:
 - [ ] `dynamic_reference_script` 中所有 `call_tool` 均使用**两参数**格式：`call_tool("完整工具名", {参数dict})`，工具名来自 `available_tools` 列表，❌ 禁止 `call_tool('server', 'tool', args)` 三参数写法
 - [ ] `dynamic_reference_script` 中所有字段访问均使用 `.get()` 防御性写法，❌ 禁止 `data['field']` 直接索引
 - [ ] `dynamic_reference_script` 中所有文件路径均以 `/data/` 开头，❌ 禁止使用 `/tmp/`、`/var/`、`/project/`、`/home/` 等沙箱外路径
+- [ ] **[有状态 bucket 专项]** 若 `bucket` 为 `PRODUCTIVITY` 或 `CODING`：`strategy` 必须为 `state_check`，`state_assertions` **不可为空数组**，至少包含 2-3 条断言
+- [ ] **[有状态 bucket 专项]** `state_assertions` 中每条断言的 `code` 字段是纯 Python 表达式（可被 `eval()` 直接执行），只使用 `os`/`json`/`re`，不含 `import`/赋值/多行语句
+- [ ] **[有状态 bucket 专项]** `state_assertions` 中的文件路径均以 `/data/` 开头
+- [ ] **[无状态 bucket 专项]** 若 `bucket` 不是 `PRODUCTIVITY`/`CODING`：`strategy` 必须为 `dynamic_script`，`state_assertions` 必须为 `[]`
 
