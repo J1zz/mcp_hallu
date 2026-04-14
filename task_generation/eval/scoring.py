@@ -7,7 +7,7 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from .schema import HallucinationType, STATEFUL_BUCKETS, Task
+from .schema import HallucinationType, Task
 from .trajectory import _safe_str
 
 logger = logging.getLogger(__name__)
@@ -734,9 +734,8 @@ def route_and_score(
       Confusion Trap → score_confusion_trap（纯工具名规则，不看结果，不看 bucket）
       Void Trap      → score_void_trap（越早停止越高，不看结果，不看 bucket）
       Memory / Reasoning Trap：
-        bucket in STATEFUL_BUCKETS (PRODUCTIVITY, CODING)
-          且 strategy == "state_check" → score_state_assertions（断言验证世界状态）
-        其他情况（strategy="dynamic_script"，或非有状态 bucket）→ score_parallel_execution（LLM对比GT日志）
+        strategy == "state_check" → score_state_assertions（断言验证世界状态，不区分 bucket）
+        其他情况（strategy="dynamic_script"）→ score_parallel_execution（LLM对比GT日志）
 
     Parameters
     ----------
@@ -755,11 +754,11 @@ def route_and_score(
             llm_client=llm_client,
         )
 
-    # Memory / Reasoning Trap：按 bucket + strategy 区分有状态 vs 无状态
-    # 有状态条件：bucket 属于 STATEFUL_BUCKETS（PRODUCTIVITY/CODING）且 strategy 显式为 state_check
-    # 注意：历史数据 strategy="dynamic_script" 的 PRODUCTIVITY/CODING 任务走无状态路径（state_assertions 为空）
+    # Memory / Reasoning Trap：按 strategy 区分有状态 vs 无状态
+    # 有状态条件：strategy 显式为 state_check（不再依赖 bucket）
+    # 历史数据 strategy="dynamic_script" 的任务走无状态路径（state_assertions 为空）
     strategy    = task.ground_truth.get("strategy", "")
-    is_stateful = task.bucket.upper() in STATEFUL_BUCKETS and strategy == "state_check"
+    is_stateful = strategy == "state_check"
 
     if is_stateful:
         return score_state_assertions(task, agent_tool_calls, agent_response)
