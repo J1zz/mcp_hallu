@@ -30,15 +30,23 @@ uv run python generate_tasks_from_prompt.py \
   --output tasks/all_v2_tasks.jsonl"""
 # 脚本所在目录作为根目录（兼容任意工作目录）
 ROOT = Path(__file__).parent
-TOOLS_FILE = ROOT / "tools_discription/ list-tools_bucketed_readonly.json"
+TOOLS_FILE_STATELESS = ROOT / "tools_discription/ list-tools_bucketed_readonly.json"
+TOOLS_FILE_STATEFUL  = ROOT / "tools_discription/list-tools_bucketed.json"
 PROMPTS_DIR = ROOT / "prompts"
 
-# Prompt 文件映射
+# Prompt 文件映射（无状态：dynamic_script）
 PROMPT_FILES = {
     "Reasoning Trap": PROMPTS_DIR / "reasoning_trap_prompt.md",
-    "Void Trap": PROMPTS_DIR / "void_trap_prompt.md",
+    "Void Trap":      PROMPTS_DIR / "void_trap_prompt.md",
     "Confusion Trap": PROMPTS_DIR / "confusion_trap_prompt.md",
-    "Memory Trap": PROMPTS_DIR / "memory_trap_prompt.md",
+    "Memory Trap":    PROMPTS_DIR / "memory_trap_prompt.md",
+}
+
+# Prompt 文件映射（有状态：state_check）
+PROMPT_FILES_STATEFUL = {
+    "Reasoning Trap": PROMPTS_DIR / "reasoning_trap_stateful_prompt.md",
+    "Memory Trap":    PROMPTS_DIR / "memory_trap_stateful_prompt.md",
+    "Confusion Trap": PROMPTS_DIR / "confusion_trap_stateful_prompt.md",
 }
 
 # 类型名简写 → 全称，方便命令行传参
@@ -65,13 +73,25 @@ RPM_DELAY = float(os.getenv("RPM_DELAY", "0"))       # 0 = 不主动限速
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "5"))
 RETRY_BASE_WAIT = float(os.getenv("RETRY_BASE_WAIT", "10"))
 
-def load_tools_by_bucket():
-    tools = json.loads(TOOLS_FILE.read_text())
+def load_tools_by_bucket(tools_file: Path):
+    tools = json.loads(tools_file.read_text())
     by_bucket = {}
     for tool in tools:
         bucket = tool.get("bucket", "UNMAPPED")
         by_bucket.setdefault(bucket, []).append(tool)
     return by_bucket
+
+
+def _validate_stateful(task: dict) -> bool:
+    """校验 stateful 任务结构：strategy=state_check，state_assertions 非空，dynamic_reference_script 为空。"""
+    gt = task.get("ground_truth", {})
+    if gt.get("strategy") != "state_check":
+        return False
+    if not gt.get("state_assertions"):
+        return False
+    if gt.get("dynamic_reference_script", "").strip():
+        return False
+    return True
 
 
 def build_prompt(template: str, hallucination_type: str, bucket: str, difficulty: str, tools):
@@ -238,12 +258,13 @@ def generate_task_with_llm(prompt: str, client: OpenAI) -> dict | None:
     return None
 
 
-def load_prompt_template(hallucination_type: str) -> str:
-    """根据幻觉类型加载对应的 prompt 模板"""
-    prompt_file = PROMPT_FILES.get(hallucination_type)
+def load_prompt_template(hallucination_type: str, stateful: bool = False) -> str:
+    """根据幻觉类型和模式加载对应的 prompt 模板。"""
+    prompt_files = PROMPT_FILES_STATEFUL if stateful else PROMPT_FILES
+    prompt_file = prompt_files.get(hallucination_type)
     if not prompt_file or not prompt_file.exists():
         raise FileNotFoundError(
-            f"Prompt file not found for {hallucination_type}: {prompt_file}"
+            f"Prompt file not found for {hallucination_type} (stateful={stateful}): {prompt_file}"
         )
     return prompt_file.read_text(encoding="utf-8")
 
@@ -254,14 +275,18 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例用法：
-  # 生成 Memory Trap 全部 bucket × 难度组合
+  # 生成 Memory Trap 全部 bucket × 难度组合（无状态）
   uv run python generate_tasks_from_prompt.py --type memory --output tasks/memory_v2.jsonl
 
-  # 只生成 ANALYTICS bucket 的 Easy/Medium
+  # 生成有状态 Reasoning Trap（任意 bucket）
+  uv run python generate_tasks_from_prompt.py --type reasoning --stateful \\
+      --output tasks/reasoning_stateful.jsonl
+
+  # 只生成 ANALYTICS bucket 的 Easy/Medium（无状态）
   uv run python generate_tasks_from_prompt.py --type memory --output tasks/memory_v2.jsonl \\
       --buckets ANALYTICS --difficulties Easy Medium
 
-  # 生成所有类型（不指定 --type 则生成全部）
+  # 生成所有无状态类型（不指定 --type 则生成全部）
   uv run python generate_tasks_from_prompt.py --output tasks/all_tasks.jsonl
         """,
     )
@@ -288,6 +313,11 @@ def main():
         default=["Easy", "Medium", "Hard"],
         help="难度列表（默认 Easy Medium Hard）",
     )
+    parser.add_argument(
+        "--stateful",
+        action="store_true",
+        help="生成 state_check 类型任务（agent 需写入文件状态）。仅支持 Reasoning Trap / Memory Trap。",
+    )
     args = parser.parse_args()
 
     if not LLM_API_KEY:
@@ -300,13 +330,21 @@ def main():
         if not resolved:
             print(f"Error: unknown type '{args.hallu_type}'. Choose from: memory, reasoning, confusion, void")
             return
+        # stateful 模式仅支持 Reasoning/Memory/Confusion Trap
+        if args.stateful and resolved not in PROMPT_FILES_STATEFUL:
+            print(f"Error: --stateful 不支持 '{resolved}'，仅支持 Reasoning Trap / Memory Trap / Confusion Trap")
+            return
         hallucination_types = [resolved]
     else:
-        hallucination_types = list(PROMPT_FILES.keys())
+        if args.stateful:
+            hallucination_types = list(PROMPT_FILES_STATEFUL.keys())
+        else:
+            hallucination_types = list(PROMPT_FILES.keys())
 
     # 验证 prompt 文件存在
+    prompt_map = PROMPT_FILES_STATEFUL if args.stateful else PROMPT_FILES
     for ht in hallucination_types:
-        pf = PROMPT_FILES[ht]
+        pf = prompt_map[ht]
         if not pf.exists():
             print(f"Error: Prompt file not found: {pf}")
             return
@@ -323,7 +361,10 @@ def main():
         client_kwargs["base_url"] = LLM_BASE_URL
     client = OpenAI(**client_kwargs)
 
-    tools_by_bucket = load_tools_by_bucket()
+    # stateful 模式使用完整工具集（含写操作），stateless 使用只读工具集
+    tools_file = TOOLS_FILE_STATEFUL if args.stateful else TOOLS_FILE_STATELESS
+    tools_by_bucket = load_tools_by_bucket(tools_file)
+    print(f"  Tools file : {tools_file.name}  ({sum(len(v) for v in tools_by_bucket.values())} tools)")
 
     # 过滤 bucket
     if args.buckets:
@@ -342,6 +383,7 @@ def main():
     print(f"  Buckets    : {buckets}")
     print(f"  Difficulties: {difficulties}")
     print(f"  Model      : {LLM_MODEL}")
+    print(f"  Mode       : {'stateful (state_check)' if args.stateful else 'stateless (dynamic_script)'}")
     print(f"  Output     : {output_path}")
     print("-" * 60)
 
@@ -352,7 +394,7 @@ def main():
         for idx, (bucket, hallucination_type, difficulty) in enumerate(combos, 1):
             print(f"[{idx}/{len(combos)}] {bucket} | {hallucination_type} | {difficulty}")
 
-            template = load_prompt_template(hallucination_type)
+            template = load_prompt_template(hallucination_type, stateful=args.stateful)
             prompt = build_prompt(
                 template,
                 hallucination_type=hallucination_type,
@@ -364,10 +406,18 @@ def main():
             task = generate_task_with_llm(prompt, client)
 
             if task:
+                # stateful 模式：校验生成结果结构
+                if args.stateful and not _validate_stateful(task):
+                    fail_count += 1
+                    print(f"  ✗ Failed (stateful validation: strategy={task.get('ground_truth', {}).get('strategy')!r}, "
+                          f"assertions={len(task.get('ground_truth', {}).get('state_assertions', []))})")
+                    continue
+
                 task["_generation_metadata"] = {
                     "bucket": bucket,
                     "hallucination_type": hallucination_type,
                     "difficulty": difficulty,
+                    "stateful": args.stateful,
                 }
                 f.write(json.dumps(task, ensure_ascii=False) + "\n")
                 f.flush()  # 每条立即写盘，避免中途崩溃丢失
