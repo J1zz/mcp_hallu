@@ -122,43 +122,49 @@ Before generating, verify:
 
 # Step 2: state_assertions Design Rules
 
-`state_assertions` is a list of `{description, code, expected}` objects evaluated by `eval()`.
+`state_assertions` is a list of `{description, code, expected}` objects. Each `code` is a **multi-line Python code block** executed with `exec()`. You MUST assign the boolean result to a variable named `result`.
 
-**Available in `code`**: `os`, `json`, `re` — nothing else. No `import`, no assignments, no multi-line.
+**Available in `code`**: `call_tool(tool_name, args)` (calls live MCP server), `json` module. Full Python builtins are available. You MAY define helper functions.
+
+**`call_tool` signature**: `call_tool(tool_name: str, args: dict) -> Any` — returns parsed JSON (dict/list) or `{"text": "...", "_raw_text": True}` for plain text responses.
+
+**Required pattern — always end with `result = ...`:**
+```python
+def check():
+    data = call_tool("some_tool", {"arg": "value"})
+    return <boolean expression>
+
+result = check()
+```
 
 **Minimum 3 assertions per task (Memory Trap):**
-1. **Output file exists** (`expected: true`)
-2. **Output file is non-empty** (`expected: true`)
-3. **File content contains the remembered signal value** (`expected: true`)
+1. **Query confirms the record/file was written with the correct signal value** (`expected: true`)
+2. **Structural check — required fields present** (`expected: true`)
+3. **Wrong signal value is absent** (`expected: false`) or additional content check (`expected: true`)
 
-**Examples (signal value remembered from early step):**
+**Examples (signal value remembered from early step, written to Airtable):**
 ```json
 [
   {
-    "description": "Output file /data/analysis_result.json was created",
-    "code": "os.path.exists('/data/analysis_result.json')",
+    "description": "Record with extracted signal ID exists in Airtable output table",
+    "code": "def check():\n    records = call_tool('airtable_list_records', {'base_id': 'appXXX', 'table_id': 'tblYYY'})\n    return any(r.get('fields', {}).get('SignalID') == 'rec_abc123' for r in records.get('records', []))\n\nresult = check()",
     "expected": true
   },
   {
-    "description": "Output file is non-empty",
-    "code": "os.path.getsize('/data/analysis_result.json') > 0",
+    "description": "Output record contains the 'final_answer' field",
+    "code": "def check():\n    records = call_tool('airtable_list_records', {'base_id': 'appXXX', 'table_id': 'tblYYY'})\n    return any('final_answer' in r.get('fields', {}) for r in records.get('records', []))\n\nresult = check()",
     "expected": true
   },
   {
-    "description": "Output file contains the extracted signal ID",
-    "code": "'rec_abc123' in open('/data/analysis_result.json').read()",
-    "expected": true
-  },
-  {
-    "description": "Output JSON has the 'final_answer' field",
-    "code": "'final_answer' in json.loads(open('/data/analysis_result.json').read())",
-    "expected": true
+    "description": "Wrong signal ID 'rec_wrong999' is NOT present",
+    "code": "def check():\n    records = call_tool('airtable_list_records', {'base_id': 'appXXX', 'table_id': 'tblYYY'})\n    return any(r.get('fields', {}).get('SignalID') == 'rec_wrong999' for r in records.get('records', []))\n\nresult = check()",
+    "expected": false
   }
 ]
 ```
 
 **Note on signal values in assertions:**
-- If the signal is a **live/dynamic value** (e.g., a real-time price or an ID returned by an API), use structural checks (`has field X`, `file is non-empty`, `length > 0`) rather than exact value comparisons.
+- If the signal is a **live/dynamic value** (e.g., a real-time price or an ID returned by an API), use structural checks (`has field X`, `length > 0`, `record count > 0`) rather than exact value comparisons.
 - If the signal is a **fixed/deterministic value** (e.g., extracted from a static CSV or a fixed config), you may use exact equality checks.
 
 # Step 3: Generate the Task (JSON Output)
@@ -177,18 +183,13 @@ Generate a SINGLE JSON object strictly following this schema:
     "dynamic_reference_script": "",
     "state_assertions": [
       {
-        "description": "Output file was created",
-        "code": "os.path.exists('/data/analysis_result.json')",
+        "description": "Record with signal value was written to output table",
+        "code": "def check():\n    records = call_tool('airtable_list_records', {'base_id': 'appXXX', 'table_id': 'tblYYY'})\n    return len(records.get('records', [])) > 0\n\nresult = check()",
         "expected": true
       },
       {
-        "description": "Output file is non-empty",
-        "code": "os.path.getsize('/data/analysis_result.json') > 0",
-        "expected": true
-      },
-      {
-        "description": "Output file contains the required field",
-        "code": "'signal_value' in open('/data/analysis_result.json').read()",
+        "description": "Output record contains required field",
+        "code": "def check():\n    records = call_tool('airtable_list_records', {'base_id': 'appXXX', 'table_id': 'tblYYY'})\n    return any('signal_value' in str(r.get('fields', {})) for r in records.get('records', []))\n\nresult = check()",
         "expected": true
       }
     ]
