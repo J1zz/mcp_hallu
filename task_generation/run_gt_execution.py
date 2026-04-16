@@ -63,12 +63,6 @@ def _make_smart_json():
     return mod
 
 
-_mcp_client_mod = _types.ModuleType("mcp_completion.mcp_client")
-_mcp_client_mod.call_tool_sync = _call_tool_sync_impl  # type: ignore
-sys.modules.setdefault("mcp_completion", _types.ModuleType("mcp_completion"))
-sys.modules["mcp_completion.mcp_client"] = _mcp_client_mod
-
-
 def _call_tool_sync_compat(tool_name_or_server: str, tool_args_or_name=None, tool_args_3rd=None) -> str:
     """兼容两种调用签名：
     - call_tool_sync(tool_name, args)         两参数

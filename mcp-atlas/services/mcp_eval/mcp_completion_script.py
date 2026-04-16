@@ -314,14 +314,13 @@ class AsyncMCPTrajectoryGenerator:
         task_id = row_data.get("TASK", task_index)
         prompt = row_data.get("PROMPT", "")
         num_attempts = 0
+        # start_time 放在 try 块外，确保 except 块里 end_time - start_time 不会 NameError
+        start_time = time.time()
 
         try:
             # Stagger requests with random delay to avoid thundering herd
             random_sleep = random.uniform(0, 5)
             await asyncio.sleep(random_sleep)
-
-            # Start timing after stagger delay
-            start_time = time.time()
             logging.info(f"[{task_index + 1}/{total_tasks}] Processing task {task_id}")
 
             # 1. FETCH: Get live trajectory
@@ -360,22 +359,22 @@ class AsyncMCPTrajectoryGenerator:
                     for item in reversed(conversation):
                         if item.get("type") == "message":
                             msg = item.get("data", {})
-                        if msg.get("role") == "assistant" and msg.get("content"):
-                            result.script_model_response = msg["content"]
-                            break
-                        elif msg.get("role") == "tool" and msg.get("content"):
-                            result.script_model_response = (
-                                msg["content"][0]["text"]
-                                if isinstance(msg["content"], list)
-                                and len(msg["content"]) > 0
-                                else str(msg["content"])
-                            )
-                            break
-                        elif msg.get("role") == "assistant" and not msg.get("content"):
-                            result.script_model_response = str(
-                                msg.get("tool_calls", "")
-                            )
-                            break
+                            if msg.get("role") == "assistant" and msg.get("content"):
+                                result.script_model_response = msg["content"]
+                                break
+                            elif msg.get("role") == "tool" and msg.get("content"):
+                                result.script_model_response = (
+                                    msg["content"][0]["text"]
+                                    if isinstance(msg["content"], list)
+                                    and len(msg["content"]) > 0
+                                    else str(msg["content"])
+                                )
+                                break
+                            elif msg.get("role") == "assistant" and not msg.get("content"):
+                                result.script_model_response = str(
+                                    msg.get("tool_calls", "")
+                                )
+                                break
                 except Exception:
                     pass
 
@@ -415,6 +414,8 @@ class AsyncMCPTrajectoryGenerator:
                 "SHOULD_STOP_EARLY": row_data.get("SHOULD_STOP_EARLY", ""),
                 "EVALUATION_RULES": row_data.get("EVALUATION_RULES", ""),
                 "STATE_ASSERTIONS": row_data.get("STATE_ASSERTIONS", ""),
+                # GT_STRATEGY 必须透传：评分路由器依赖此字段区分 state_check vs dynamic_script
+                "GT_STRATEGY": row_data.get("GT_STRATEGY", ""),
                 # Completion result columns (from script execution) - all lowercase
                 "script_model_response": result.script_model_response,
                 "raw_conversation_history": result.raw_conversation_history,
@@ -464,6 +465,8 @@ class AsyncMCPTrajectoryGenerator:
                 "SHOULD_STOP_EARLY": row_data.get("SHOULD_STOP_EARLY", ""),
                 "EVALUATION_RULES": row_data.get("EVALUATION_RULES", ""),
                 "STATE_ASSERTIONS": row_data.get("STATE_ASSERTIONS", ""),
+                # GT_STRATEGY 必须透传：评分路由器依赖此字段区分 state_check vs dynamic_script
+                "GT_STRATEGY": row_data.get("GT_STRATEGY", ""),
                 # Completion result columns (from script execution) - all lowercase
                 "script_model_response": f"ERROR: {str(e)}",
                 "raw_conversation_history": None,
@@ -528,34 +531,6 @@ class AsyncMCPTrajectoryGenerator:
         )
 
         return pd.DataFrame(valid_results)
-
-        """Parse claims from string format"""
-        if not claims_str or pd.isna(claims_str):
-            return []
-
-        try:
-            # Try parsing as JSON list
-            if claims_str.strip().startswith("["):
-                return json.loads(claims_str)
-            # Otherwise split by common delimiters
-            else:
-                # Split by semicolon or newline
-                claims = []
-                for delimiter in [";", "\n", ","]:
-                    if delimiter in claims_str:
-                        claims = [
-                            claim.strip()
-                            for claim in claims_str.split(delimiter)
-                            if claim.strip()
-                        ]
-                        break
-
-                if not claims:
-                    claims = [claims_str.strip()]
-
-                return claims
-        except:
-            return [claims_str.strip()] if claims_str.strip() else []
 
 
 def run_extract_script(input_csv_path: str) -> str:

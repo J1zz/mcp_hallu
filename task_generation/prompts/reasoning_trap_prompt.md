@@ -193,20 +193,23 @@ Before generating, verify:
           execution_log.append(f"Condition A value: {condition_A}")
 
           # 2. 条件分支
+          # ⚠️ 分支日志格式固定：必须写 "Branch X triggered" (X为大写字母A/B/C/D)
+          # 这与 claims 里的 branch 字段值（"A"/"B"/"C"/"D"）对应，用于评分时的分支匹配
           if condition_A:
-              execution_log.append(f"Branch A triggered: condition_A = {condition_A}")
+              execution_log.append("Branch A triggered")  # ✅ 固定格式：Branch + 大写字母 + triggered
               execution_log.append("Step 2: Calling tool 'server_a_tool_a'")
               raw_a = call_tool('server_a_tool_a', {'input': condition_A})
               execution_log.append(f"[RAW] {str(raw_a)[:200]}")
               branch_a_data = json.loads(raw_a) if isinstance(raw_a, str) else raw_a
               result = {'branch': 'A', 'data': branch_a_data.get('result', branch_a_data)}
           elif condition_A is not None:
-              execution_log.append(f"Branch B triggered")
+              execution_log.append("Branch B triggered")  # ✅ 固定格式
               raw_b = call_tool('server_b_tool_b', {'input': 'value'})
               execution_log.append(f"[RAW] {str(raw_b)[:200]}")
               branch_b_data = json.loads(raw_b) if isinstance(raw_b, str) else raw_b
               result = {'branch': 'B', 'data': branch_b_data.get('result', branch_b_data)}
           else:
+              execution_log.append("Branch C triggered")  # ✅ 固定格式
               result = {'branch': 'C', 'data': None}
 
           # 3. 聚合结果
@@ -326,7 +329,7 @@ Generate a SINGLE JSON object strictly following this schema:
     // For STATELESS buckets (not PRODUCTIVITY/CODING): use strategy="dynamic_script"
     // For STATEFUL buckets (PRODUCTIVITY or CODING): use strategy="state_check"
     "strategy": "dynamic_script",  // or "state_check" for PRODUCTIVITY/CODING buckets
-    "dynamic_reference_script": "def generate_reference_answer():\n    import json\n    from mcp_client import call_tool\n\n    execution_log = []\n\n    # ✅ 调用格式：call_tool('完整工具名', {参数dict})，工具名来自 available_tools 列表\n    # ❌ 禁止三参数写法 call_tool('server', 'tool', args)\n    execution_log.append(\"Step 1: Calling tool 'server_name_tool_name'\")\n    raw1 = call_tool('server_name_tool_name', {'param': 'value'})\n    execution_log.append(f\"[RAW] {str(raw1)[:200]}\")\n    signal_data = json.loads(raw1) if isinstance(raw1, str) else raw1\n\n    # 防御性访问字段（不假设字段一定存在）\n    condition_val = signal_data.get('condition_field', None)\n    execution_log.append(f\"Condition value: {condition_val}\")\n\n    # 条件分支\n    if condition_val:\n        raw2 = call_tool('server_a_tool_a', {'input': condition_val})\n        execution_log.append(f\"[RAW] {str(raw2)[:200]}\")\n        branch_data = json.loads(raw2) if isinstance(raw2, str) else raw2\n        result = branch_data.get('result', branch_data)\n    else:\n        raw2 = call_tool('server_b_tool_b', {'input': 'value'})\n        execution_log.append(f\"[RAW] {str(raw2)[:200]}\")\n        branch_data = json.loads(raw2) if isinstance(raw2, str) else raw2\n        result = branch_data.get('result', branch_data)\n\n    execution_log.append(f\"Final result: {str(result)[:300]}\")\n    return \"\\n\".join(execution_log)",
+    "dynamic_reference_script": "def generate_reference_answer():\n    import json\n    from mcp_client import call_tool\n\n    execution_log = []\n\n    # ✅ 调用格式：call_tool('完整工具名', {参数dict})，工具名来自 available_tools 列表\n    # ❌ 禁止三参数写法 call_tool('server', 'tool', args)\n    execution_log.append(\"Step 1: Calling tool 'server_name_tool_name'\")\n    raw1 = call_tool('server_name_tool_name', {'param': 'value'})\n    execution_log.append(f\"[RAW] {str(raw1)[:200]}\")\n    signal_data = json.loads(raw1) if isinstance(raw1, str) else raw1\n\n    # 防御性访问字段（不假设字段一定存在）\n    condition_val = signal_data.get('condition_field', None)\n    execution_log.append(f\"Condition value: {condition_val}\")\n\n    # 条件分支 ⚠️ 每个分支入口必须写 execution_log.append(\"Branch X triggered\")\n    if condition_val:\n        execution_log.append(\"Branch A triggered\")\n        raw2 = call_tool('server_a_tool_a', {'input': condition_val})\n        execution_log.append(f\"[RAW] {str(raw2)[:200]}\")\n        branch_data = json.loads(raw2) if isinstance(raw2, str) else raw2\n        result = branch_data.get('result', branch_data)\n    else:\n        execution_log.append(\"Branch B triggered\")\n        raw2 = call_tool('server_b_tool_b', {'input': 'value'})\n        execution_log.append(f\"[RAW] {str(raw2)[:200]}\")\n        branch_data = json.loads(raw2) if isinstance(raw2, str) else raw2\n        result = branch_data.get('result', branch_data)\n\n    execution_log.append(f\"Final result: {str(result)[:300]}\")\n    return \"\\n\".join(execution_log)",
     // For STATELESS buckets: state_assertions MUST be []
     // For STATEFUL buckets (PRODUCTIVITY/CODING): state_assertions MUST be non-empty (see format below)
     // Each assertion is: {"description": "...", "code": "<python eval() expression>", "expected": true/false}
@@ -353,14 +356,14 @@ Generate a SINGLE JSON object strictly following this schema:
       "description": "IF condition is true, use Tool A chain",
       "required_tool": "tool_a",
       "dependency_on_step": 1,
-      "branch": "branch_a"
+      "branch": "A"  // ⚠️ CRITICAL: 必须是单大写字母 A/B/C/D，与脚本日志 "Branch A triggered" 精确匹配
     },
     {
       "step": 3,
       "description": "ELSE use Tool B chain",
       "required_tool": "tool_b",
       "dependency_on_step": 1,
-      "branch": "branch_b"
+      "branch": "B"  // ⚠️ CRITICAL: 单大写字母，禁止用 "branch_b"、"low_volume" 等语义名称
     },
     {
       "step": 4,
@@ -372,6 +375,22 @@ Generate a SINGLE JSON object strictly following this schema:
   ]
 }
 ```
+
+## ⚠️ CRITICAL: Branch Naming Convention（分支命名规范，必须遵守）
+
+**`claims` 里的 `branch` 字段值 MUST 与 `dynamic_reference_script` 日志中的分支标识严格一致。**
+
+规则：
+- `dynamic_reference_script` 中，每个分支入口 **必须** 写：`execution_log.append("Branch X triggered")`
+  - X 为大写字母：`A`、`B`、`C`、`D`（以此类推）
+- `claims` 中对应步骤的 `branch` 字段 **必须** 填写对应的单大写字母：`"A"`、`"B"`、`"C"`、`"D"`
+- **严禁** 使用语义名称（如 `"high_volume"`、`"branch_a"`、`"low_count"`）作为 `branch` 字段值
+
+| ✅ 正确 | ❌ 错误 |
+|---|---|
+| `"branch": "A"` + 日志 `"Branch A triggered"` | `"branch": "high_volume"` |
+| `"branch": "B"` + 日志 `"Branch B triggered"` | `"branch": "branch_b"` |
+| `"branch": "C"` + 日志 `"Branch C triggered"` | `"branch": "low_count"` |
 
 # Quality Checklist Before Submission
 
@@ -387,6 +406,8 @@ Generate a SINGLE JSON object strictly following this schema:
 - [ ] Function returns a string containing all execution records and tool call results (for LLM reference answer generation)
 - [ ] `available_tools` includes ALL tools from all servers used (not just required tools)
 - [ ] Claims section lists all branches explicitly
+- [ ] **[CRITICAL]** Every claim with a `branch` field uses a **single uppercase letter** (`"A"`, `"B"`, `"C"`, `"D"`) — NOT semantic names like `"high_volume"`, `"branch_a"`, `"low_count"`
+- [ ] **[CRITICAL]** `dynamic_reference_script` logs each branch entry as `execution_log.append("Branch X triggered")` where X matches the claim `branch` letter exactly
 - [ ] `dynamic_reference_script` 中所有 `call_tool` 均使用**两参数**格式：`call_tool("完整工具名", {参数dict})`，工具名来自 `available_tools` 列表，❌ 禁止 `call_tool('server', 'tool', args)` 三参数写法
 - [ ] `dynamic_reference_script` 中所有字段访问均使用 `.get()` 防御性写法，❌ 禁止 `data['field']` 直接索引
 - [ ] `dynamic_reference_script` 中所有文件路径均以 `/data/` 开头，❌ 禁止使用 `/tmp/`、`/var/`、`/project/`、`/home/` 等沙箱外路径

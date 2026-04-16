@@ -195,10 +195,11 @@ def _extract_gt_branch_from_log(gt_log: str) -> Optional[str]:
     """
     if not gt_log:
         return None
-    # 匹配 "Branch X" 或 "Branch X triggered" 或 "branch: X"
+    # 匹配 "Branch X" 或 "Branch X triggered/(" 或 "branch: X"
+    # 注意：不使用 r'branch\s+word'（无冒号），以避免误匹配 "No branch here" 等短语
     patterns = [
-        r'Branch\s+([A-Z])\s*(?:\(|triggered|\b)',   # Branch A / Branch A triggered
-        r'branch[:\s]+([a-z_]+)',                     # branch: high_volume
+        r'Branch\s+([A-Z])\s*(?:\(|triggered|\b)',  # Branch A / Branch A (...) / Branch A triggered
+        r'branch:\s*([a-z_][a-z0-9_]*)',            # branch: high_volume（需有冒号）
     ]
     for pat in patterns:
         m = re.search(pat, gt_log, re.IGNORECASE)
@@ -215,8 +216,9 @@ def _get_branch_claim_tools(
     - 该分支应该调用的工具集合（correct_branch_tools）
     - 其他分支应该调用但不该出现的工具集合（wrong_branch_tools）
 
-    branch 字段在 claims 里可能是 "high_volume"、"A"、"medium_volume" 等。
-    匹配策略：大小写无关，且允许部分匹配（"A" 匹配 "Branch A"）。
+    branch 字段在 claims 里应与 GT 日志中提取的分支标识一致（大小写无关精确匹配）。
+    例如 GT 日志里 "Branch A triggered" → gt_branch_id="A"，claims 里 branch="A"。
+    注意：不使用子字符串匹配，避免 "a" 误匹配 "high_volume"、"low_volume" 等。
     """
     gt_id_lower = gt_branch_id.lower()
 
@@ -224,7 +226,7 @@ def _get_branch_claim_tools(
         if not claim_branch:
             return False
         b = str(claim_branch).lower()
-        return b == gt_id_lower or gt_id_lower in b or b in gt_id_lower
+        return b == gt_id_lower
 
     correct_tools: Set[str] = set()
     wrong_tools:   Set[str] = set()
@@ -241,6 +243,10 @@ def _get_branch_claim_tools(
             correct_tools.add(tool)
         elif claim.get("branch"):
             wrong_tools.add(tool)
+
+    # 若某工具同时出现在正确分支和其他分支（共用工具），不应计入 wrong_tools
+    # 否则调用该共用工具会被误惩罚
+    wrong_tools -= correct_tools
 
     return correct_tools or None, wrong_tools or None
 
@@ -393,19 +399,31 @@ def score_confusion_trap(
     """Confusion Trap：按设计文档三维度加权评分。
 
     评分维度（来自 eval_design.md）：
-      - 正确工具命中（correct_tool 是否被调用）：50%
+      - 正确工具命中（required_tools 或 correct_tool 是否被调用）：50%
       - 禁用工具未调用（forbidden_tools 全部回避）：30%
       - 语义关键词匹配（claims 关键词在 agent 回答中出现）：20%
 
     score = correct_hit × 0.5 + (1 - forbidden_penalty) × 0.3 + semantic × 0.2
-    """
-    rules        = task.evaluation_rules
-    forbidden    = rules.get("forbidden_tools", [])
-    correct_tool = rules.get("correct_tool")
-    tool_set     = set(agent_tool_calls)
 
-    # 正确工具命中（50%）：correct_tool 是否出现在调用列表中
-    correct_hit = 1.0 if (correct_tool and correct_tool in tool_set) else 0.0
+    字段兼容策略：
+      优先使用 evaluation_rules.required_tools（列表）；
+      若不存在，则退回 evaluation_rules.correct_tool（单字符串，历史格式）。
+    """
+    rules         = task.evaluation_rules
+    forbidden     = rules.get("forbidden_tools", [])
+    tool_set      = set(agent_tool_calls)
+
+    # 兼容两种字段格式：required_tools（列表）> correct_tool（单字符串）
+    required_tools: List[str] = rules.get("required_tools") or []
+    correct_tool: Optional[str] = rules.get("correct_tool")
+    if not required_tools and correct_tool:
+        required_tools = [correct_tool]
+
+    # 正确工具命中（50%）：required_tools 中至少一个出现在调用列表中
+    if required_tools:
+        correct_hit = _tool_hit_rate(required_tools, tool_set)
+    else:
+        correct_hit = 0.0
 
     # 禁用工具惩罚（30%）：forbidden_tools 中被调用的比例
     forbidden_penalty = _tool_hit_rate(forbidden, tool_set) if forbidden else 0.0
@@ -418,8 +436,9 @@ def score_confusion_trap(
     return {
         "strategy":             "confusion_trap",
         "correct_tool":         correct_tool,
+        "required_tools":       required_tools,
         "forbidden_tools":      forbidden,
-        "agent_used_correct":   correct_tool in tool_set if correct_tool else False,
+        "agent_used_correct":   any(t in tool_set for t in required_tools),
         "agent_used_forbidden": [t for t in forbidden if t in tool_set],
         "correct_hit":          round(correct_hit, 4),
         "forbidden_penalty":    round(forbidden_penalty, 4),

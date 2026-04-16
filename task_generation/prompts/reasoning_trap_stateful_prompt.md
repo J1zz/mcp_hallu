@@ -212,28 +212,28 @@ Generate a SINGLE JSON object strictly following this schema:
       "description": "IF condition met: execute Branch A tool chain",
       "required_tool": "tool_a",
       "dependency_on_step": 1,
-      "branch": "branch_a"
+      "branch": "A"  // ⚠️ CRITICAL: 必须是单大写字母 A/B/C/D，禁止用 "branch_a"、"high_volume" 等语义名称
     },
     {
       "step": 3,
       "description": "Branch A: write result to /data/result_branch_a.json",
       "required_tool": "filesystem_write_file",
       "dependency_on_step": 2,
-      "branch": "branch_a"
+      "branch": "A"  // ⚠️ CRITICAL: 同一分支的所有步骤使用相同的单大写字母
     },
     {
       "step": 4,
       "description": "ELSE: execute Branch B tool chain",
       "required_tool": "tool_b",
       "dependency_on_step": 1,
-      "branch": "branch_b"
+      "branch": "B"  // ⚠️ CRITICAL: 单大写字母
     },
     {
       "step": 5,
       "description": "Branch B: write result to /data/result_branch_b.json",
       "required_tool": "filesystem_write_file",
       "dependency_on_step": 4,
-      "branch": "branch_b"
+      "branch": "B"  // ⚠️ CRITICAL: 单大写字母
     }
   ]
 }
@@ -253,3 +253,4 @@ Generate a SINGLE JSON object strictly following this schema:
 - [ ] Task is self-contained and immediately executable
 - [ ] Condition is concrete and decidable from tool output fields
 - [ ] Wrong branch selection produces a different (verifiably absent) file
+- [ ] **[CRITICAL]** Every claim with a `branch` field uses a **single uppercase letter** (`"A"`, `"B"`, `"C"`, `"D"`) — NOT semantic names like `"high_volume"`, `"branch_a"`, `"low_count"`
