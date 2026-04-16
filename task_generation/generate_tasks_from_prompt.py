@@ -83,14 +83,32 @@ def load_tools_by_bucket(tools_file: Path):
 
 
 def _validate_stateful(task: dict) -> bool:
-    """校验 stateful 任务结构：strategy=state_check，state_assertions 非空，dynamic_reference_script 为空。"""
+    """校验 stateful 任务结构：
+    - strategy == state_check
+    - state_assertions 非空
+    - dynamic_reference_script 为空
+    - 每条 assertion 的 code 语法合法且包含 'result =' 赋值
+    """
     gt = task.get("ground_truth", {})
     if gt.get("strategy") != "state_check":
         return False
-    if not gt.get("state_assertions"):
+    assertions = gt.get("state_assertions")
+    if not assertions:
         return False
     if gt.get("dynamic_reference_script", "").strip():
         return False
+    for a in assertions:
+        if not isinstance(a, dict):
+            return False
+        code = (a.get("code") or "").strip()
+        if not code:
+            return False
+        try:
+            compile(code, "<assertion>", "exec")
+        except SyntaxError:
+            return False
+        if "result" not in code:
+            return False
     return True
 
 
