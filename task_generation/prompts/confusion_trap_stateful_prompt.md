@@ -108,58 +108,59 @@ Before generating, verify:
 
 # Step 2: state_assertions Design Rules
 
-`state_assertions` is a list of `{description, code, expected}` objects evaluated by `eval()`.
+`state_assertions` is a list of `{description, code, expected}` objects. Each `code` is a **multi-line Python code block** executed with `exec()`. You MUST assign the boolean result to a variable named `result`.
 
-**Available in `code`**: `os`, `json`, `re` — nothing else. No `import`, no assignments, no multi-line.
+**Available in `code`**: `call_tool(tool_name, args)` (calls live MCP server), `json` module. Full Python builtins are available. You MAY define helper functions.
+
+**`call_tool` signature**: `call_tool(tool_name: str, args: dict) -> Any` — returns parsed JSON (dict/list) or `{"text": "...", "_raw_text": True}` for plain text responses.
+
+**Required pattern — always end with `result = ...`:**
+```python
+def check():
+    data = call_tool("some_tool", {"arg": "value"})
+    return <boolean expression>
+
+result = check()
+```
 
 **Minimum 3 assertions per task:**
-1. **Output file exists** (`expected: true`)
-2. **File content is correct** (required fields, keywords, format) (`expected: true`)
-3. **Wrong-tool artifact does NOT exist OR content is wrong** (`expected: false`)
+1. **Correct tool's output exists in the MCP system** (`expected: true`)
+2. **Output has correct structure/content** (required fields, correct tool's signature fields) (`expected: true`)
+3. **Wrong-tool artifact does NOT exist OR wrong-tool's characteristic fields are absent** (`expected: false`)
 
-**Examples (confusion between two query tools):**
+**Examples (confusion between two Airtable query tools — correct returns repositories, wrong returns code snippets):**
 ```json
 [
   {
-    "description": "Output file /data/results.json was created",
-    "code": "os.path.exists('/data/results.json')",
+    "description": "Result record was written to output table",
+    "code": "def check():\n    records = call_tool('airtable_list_records', {'base_id': 'appXXX', 'table_id': 'tblOutput'})\n    return len(records.get('records', [])) > 0\n\nresult = check()",
     "expected": true
   },
   {
-    "description": "Output JSON contains required 'repositories' key from correct search tool",
-    "code": "'repositories' in json.loads(open('/data/results.json').read())",
+    "description": "Output record contains 'repositories' field from correct tool",
+    "code": "def check():\n    records = call_tool('airtable_list_records', {'base_id': 'appXXX', 'table_id': 'tblOutput'})\n    return any('repositories' in str(r.get('fields', {})) for r in records.get('records', []))\n\nresult = check()",
     "expected": true
   },
   {
-    "description": "Output file is non-empty",
-    "code": "os.path.getsize('/data/results.json') > 0",
-    "expected": true
-  },
-  {
-    "description": "Wrong tool's 'code_snippets' key must NOT be present (wrong tool was search_code, not search_repositories)",
-    "code": "'code_snippets' in json.loads(open('/data/results.json').read())",
+    "description": "Wrong tool's 'code_snippets' field must NOT be present",
+    "code": "def check():\n    records = call_tool('airtable_list_records', {'base_id': 'appXXX', 'table_id': 'tblOutput'})\n    return any('code_snippets' in str(r.get('fields', {})) for r in records.get('records', []))\n\nresult = check()",
     "expected": false
   }
 ]
 ```
 
-**Examples (confusion between two write tools):**
+**Examples (confusion between two write tools — correct writes to Notion, wrong writes to MongoDB):**
 ```json
 [
   {
-    "description": "Correct JSON output file was written",
-    "code": "os.path.exists('/data/report.json')",
+    "description": "Correct Notion page was created",
+    "code": "def check():\n    pages = call_tool('notion_API-post-page', {'parent': {'database_id': 'db_xxx'}, 'properties': {}})\n    # Query to verify — use a search/list endpoint instead\n    results = call_tool('notion_API-post-database-query', {'database_id': 'db_xxx', 'filter': {}})\n    return len(results.get('results', [])) > 0\n\nresult = check()",
     "expected": true
   },
   {
-    "description": "Plain-text fallback output must NOT exist (wrong write tool)",
-    "code": "os.path.exists('/data/report.txt')",
+    "description": "Wrong-tool MongoDB collection must be empty (wrong tool not used)",
+    "code": "def check():\n    docs = call_tool('mongodb_find', {'database': 'mydb', 'collection': 'wrong_collection', 'filter': {}})\n    return len(docs) > 0 if isinstance(docs, list) else len(docs.get('documents', [])) > 0\n\nresult = check()",
     "expected": false
-  },
-  {
-    "description": "JSON report contains 'summary' field",
-    "code": "'summary' in json.loads(open('/data/report.json').read())",
-    "expected": true
   }
 ]
 ```
@@ -180,18 +181,18 @@ Generate a SINGLE JSON object strictly following this schema:
     "dynamic_reference_script": "",
     "state_assertions": [
       {
-        "description": "Output file exists",
-        "code": "os.path.exists('/data/output.json')",
+        "description": "Correct tool output exists in MCP system",
+        "code": "def check():\n    records = call_tool('airtable_list_records', {'base_id': 'appXXX', 'table_id': 'tblOutput'})\n    return len(records.get('records', [])) > 0\n\nresult = check()",
         "expected": true
       },
       {
-        "description": "Output contains required field",
-        "code": "'results' in json.loads(open('/data/output.json').read())",
+        "description": "Output contains required field from correct tool",
+        "code": "def check():\n    records = call_tool('airtable_list_records', {'base_id': 'appXXX', 'table_id': 'tblOutput'})\n    return any('results' in str(r.get('fields', {})) for r in records.get('records', []))\n\nresult = check()",
         "expected": true
       },
       {
         "description": "Wrong-tool artifact must not exist",
-        "code": "os.path.exists('/data/wrong_output.txt')",
+        "code": "def check():\n    docs = call_tool('mongodb_find', {'database': 'mydb', 'collection': 'wrong_collection', 'filter': {}})\n    items = docs if isinstance(docs, list) else docs.get('documents', [])\n    return len(items) > 0\n\nresult = check()",
         "expected": false
       }
     ]
