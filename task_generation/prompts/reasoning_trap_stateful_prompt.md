@@ -102,58 +102,64 @@ Before generating, verify:
 - [ ] ALL input values are explicitly stated (no "provided X" without an actual value)
 - [ ] Task is self-contained and immediately executable
 - [ ] `available_tools` includes at least one filesystem/desktop-commander write tool
-- [ ] `state_assertions` verifies: correct file exists, wrong file does NOT exist, content correct
-- [ ] `state_assertions` code uses ONLY `os`/`json`/`re` — no imports, no multi-line statements
+- [ ] `state_assertions` verifies: correct branch state exists, wrong branch state does NOT exist, content correct
+- [ ] `state_assertions` code follows the `def check(): ... result = check()` pattern with `call_tool`
 
 # Step 2: state_assertions Design Rules
 
-`state_assertions` is a list of `{description, code, expected}` objects evaluated by `eval()`.
+`state_assertions` is a list of `{description, code, expected}` objects. Each `code` is a **multi-line Python code block** executed with `exec()`. You MUST assign the boolean result to a variable named `result`.
 
-**Available in `code`**: `os`, `json`, `re` — nothing else. No `import`, no assignments, no multi-line.
+**Available in `code`**: `call_tool(tool_name, args)` (calls live MCP server), `json` module. Full Python builtins are available. You MAY define helper functions.
+
+**`call_tool` signature**: `call_tool(tool_name: str, args: dict) -> Any` — returns parsed JSON (dict/list) or `{"text": "...", "_raw_text": True}` for plain text responses.
+
+**Required pattern — always end with `result = ...`:**
+```python
+def check():
+    data = call_tool("some_tool", {"arg": "value"})
+    return <boolean expression>
+
+result = check()
+```
 
 **Minimum 3 assertions per task (Reasoning Trap):**
-1. **Correct branch file exists** (`expected: true`)
-2. **Wrong branch file does NOT exist** (`expected: false`) — one per wrong branch
-3. **Content of correct file matches expected data** (`expected: true`)
+1. **Correct branch state exists** — query MCP to confirm correct-branch action was taken (`expected: true`)
+2. **Wrong branch state does NOT exist** — query MCP to confirm wrong branch was NOT taken (`expected: false`) — one per wrong branch
+3. **Content of correct branch result matches expected data** (`expected: true`)
 
-**Examples:**
+**Examples (branch determined by queried condition, result written to Airtable):**
 ```json
 [
   {
-    "description": "Branch A output file was created",
-    "code": "os.path.exists('/data/result_high.json')",
+    "description": "Branch A record exists in Airtable (correct branch taken)",
+    "code": "def check():\n    records = call_tool('airtable_list_records', {'base_id': 'appXXX', 'table_id': 'tblBranchA'})\n    return len(records.get('records', [])) > 0\n\nresult = check()",
     "expected": true
   },
   {
-    "description": "Branch B output file must NOT exist (wrong branch not taken)",
-    "code": "os.path.exists('/data/result_low.json')",
+    "description": "Branch B record must NOT exist (wrong branch not taken)",
+    "code": "def check():\n    records = call_tool('airtable_list_records', {'base_id': 'appXXX', 'table_id': 'tblBranchB'})\n    return len(records.get('records', [])) > 0\n\nresult = check()",
     "expected": false
   },
   {
-    "description": "Branch A result file is non-empty",
-    "code": "os.path.getsize('/data/result_high.json') > 0",
-    "expected": true
-  },
-  {
-    "description": "Branch A result contains expected keyword",
-    "code": "'high' in open('/data/result_high.json').read().lower()",
+    "description": "Branch A record contains 'high' classification",
+    "code": "def check():\n    records = call_tool('airtable_list_records', {'base_id': 'appXXX', 'table_id': 'tblBranchA'})\n    return any('high' in str(r.get('fields', {})).lower() for r in records.get('records', []))\n\nresult = check()",
     "expected": true
   }
 ]
 ```
 
-**For git/code tasks:**
+**For git/code tasks (result committed to repo via git tools):**
 ```json
 [
   {
-    "description": "Feature file was created in repo",
-    "code": "os.path.exists('/data/repo/feature_branch_a.py')",
+    "description": "Feature branch was created with correct name",
+    "code": "def check():\n    branches = call_tool('github_list_branches', {'owner': 'myorg', 'repo': 'myrepo'})\n    return any(b.get('name') == 'feature-branch-a' for b in branches.get('branches', branches if isinstance(branches, list) else []))\n\nresult = check()",
     "expected": true
   },
   {
-    "description": "Feature file contains expected function",
-    "code": "re.search(r'def\\s+process_data', open('/data/repo/feature_branch_a.py').read()) is not None",
-    "expected": true
+    "description": "Wrong branch was NOT created",
+    "code": "def check():\n    branches = call_tool('github_list_branches', {'owner': 'myorg', 'repo': 'myrepo'})\n    return any(b.get('name') == 'feature-branch-b' for b in branches.get('branches', branches if isinstance(branches, list) else []))\n\nresult = check()",
+    "expected": false
   }
 ]
 ```
@@ -174,18 +180,18 @@ Generate a SINGLE JSON object strictly following this schema:
     "dynamic_reference_script": "",
     "state_assertions": [
       {
-        "description": "Correct branch output file exists",
-        "code": "os.path.exists('/data/result_branch_a.json')",
+        "description": "Correct branch state exists in MCP system",
+        "code": "def check():\n    records = call_tool('airtable_list_records', {'base_id': 'appXXX', 'table_id': 'tblBranchA'})\n    return len(records.get('records', [])) > 0\n\nresult = check()",
         "expected": true
       },
       {
-        "description": "Wrong branch file must NOT exist",
-        "code": "os.path.exists('/data/result_branch_b.json')",
+        "description": "Wrong branch state must NOT exist",
+        "code": "def check():\n    records = call_tool('airtable_list_records', {'base_id': 'appXXX', 'table_id': 'tblBranchB'})\n    return len(records.get('records', [])) > 0\n\nresult = check()",
         "expected": false
       },
       {
-        "description": "Correct branch file is non-empty",
-        "code": "os.path.getsize('/data/result_branch_a.json') > 0",
+        "description": "Correct branch result contains expected data",
+        "code": "def check():\n    records = call_tool('airtable_list_records', {'base_id': 'appXXX', 'table_id': 'tblBranchA'})\n    return any('expected_field' in r.get('fields', {}) for r in records.get('records', []))\n\nresult = check()",
         "expected": true
       }
     ]
