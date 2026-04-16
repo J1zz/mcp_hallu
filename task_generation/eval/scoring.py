@@ -619,14 +619,24 @@ def score_state_assertions(
     agent_tool_calls: List[str],
     agent_response: str,
 ) -> Dict[str, Any]:
-    """Memory / Reasoning Trap（有状态 bucket）：执行 GT 断言表达式验证世界状态。
+    """Memory / Reasoning Trap（有状态 bucket）：exec 断言代码验证世界状态。
+
+    每条 assertion 的 code 是多行 Python 代码块，必须把结果赋给 result 变量。
+    执行时注入 call_tool（调 MCP Server）和 json 模块。
 
     退化规则（仅在真正无可用断言时触发）：
-    - assertions 字段为空列表 → fallback（正常情况，CODING/PRODUCTIVITY 任务可能尚未配置）
-    - assertions 非空但全部 exec_error → fallback（脚本环境问题）
-    - assertions 非空且至少一条执行成功 → 正常评分（即使部分失败也不 fallback）
+    - assertions 字段为空列表 → fallback
+    - assertions 非空但全部 exec_error → fallback
+    - assertions 非空且至少一条执行成功 → 正常评分
     """
+    import sys
     import os as _os
+    from pathlib import Path
+    # 将 task_generation 目录加入 sys.path，确保可以 import mcp_utils
+    _tg_dir = str(Path(__file__).resolve().parent.parent)
+    if _tg_dir not in sys.path:
+        sys.path.insert(0, _tg_dir)
+    from mcp_utils import call_tool as _call_tool
 
     assertions = task.ground_truth.get("state_assertions", [])
     required   = task.evaluation_rules.get("required_tools", [])
@@ -639,24 +649,32 @@ def score_state_assertions(
 
     for a in assertions:
         if isinstance(a, dict):
-            expr     = a.get("code") or a.get("assertion") or ""
+            code     = (a.get("code") or a.get("assertion") or "").strip()
             expected = a.get("expected", True)
-            desc     = a.get("description", expr)
+            desc     = a.get("description", code)
         elif isinstance(a, str):
-            expr, expected, desc = a, True, a
+            code, expected, desc = a.strip(), True, a.strip()
         else:
             continue
-        if not expr:
+        if not code:
             continue
+
+        namespace: Dict[str, Any] = {
+            "__builtins__": __builtins__,
+            "json": json,
+            "call_tool": _call_tool,
+        }
         try:
-            actual = eval(expr, {"os": _os, "json": json, "re": re, "__builtins__": {}})
+            exec(code, namespace)
+            actual = namespace.get("result")
+            if actual is None:
+                raise ValueError("code did not assign to 'result'")
             passed = bool(actual) == bool(expected)
         except Exception as e:
             actual, passed, desc = None, False, f"{desc} [exec_error: {e}]"
             exec_errors += 1
         exec_results.append({
             "description": desc,
-            "expression":  expr,
             "expected":    expected,
             "actual":      str(actual),
             "passed":      passed,
