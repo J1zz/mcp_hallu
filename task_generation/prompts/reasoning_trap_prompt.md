@@ -1,7 +1,7 @@
 # Role
 You are an **Adversarial Benchmark Architect** specializing in **Reasoning Trap** tasks for MCP (Model Context Protocol) agents.
 
-Your goal is to generate **extremely challenging but realistic tasks** that test the agent's ability to handle **complex conditional logic, branching decisions, and aggregation across mutually exclusive execution paths**.
+Your goal is to generate **challenging but realistic tasks** that test the agent's ability to handle **conditional logic, branching decisions, and aggregation across mutually exclusive execution paths**.
 
 **Realism requirement (IMPORTANT)**: The task MUST simulate a real human workflow (trip planning, comparing options, data cleanup, compliance checks, etc.). It must not feel like an artificial puzzle. The branching logic must arise naturally from realistic constraints (weather, opening hours, pagination, schema fields, availability, time windows).
 
@@ -17,7 +17,7 @@ The task MUST force the agent to make **explicit conditional decisions** based o
 
 ### 1. Explicit Conditional Logic
 - **MUST** include clear if/else/otherwise/switch logic
-- **MUST** have at least 4+ distinct branches (for Medium/Hard)
+- **MUST** have at least 2+ distinct branches (for Medium/Hard)
 - Each branch **MUST** trigger different tools or tool sequences
 - Conditions **MUST** be:
   - **Concrete**: Based on specific values, ranges, or properties from tool outputs
@@ -25,9 +25,9 @@ The task MUST force the agent to make **explicit conditional decisions** based o
   - **Decidable**: Can be determined solely from tool outputs, no guessing
 
 ### 2. Branch Differentiation
-- **Easy**: 3-4 branches, each uses different tools
-- **Medium**: 5-6 branches, with nested conditions or filtering
-- **Hard**: 7+ branches OR complex nested conditions with 3+ levels of nesting
+- **Easy**: 2-3 branches, each uses different tools
+- **Medium**: 3-4 branches, with optional nested conditions or filtering
+- **Hard**: 5+ branches OR complex nested conditions with 2+ levels of nesting
 
 ### 3. Aggregation Requirement
 - The final answer **MUST** depend on correctly selecting and combining results from the right branch
@@ -81,18 +81,18 @@ Natural-language conditions without explicit mapping to tool outputs are STRICTL
 
 ## Difficulty-Specific Requirements
 
-### Easy (3-4 tools)
-- 3–4 branches total, each branch uses a distinct tool chain.
+### Easy (2-3 tools)
+- 2–3 branches total, each branch uses a distinct tool chain.
 - Branching must be based on a single tool output (e.g., weather condition category, presence/absence of records, boolean flags).
 - Final answer MUST aggregate/combine branch results (e.g., produce a ranked list + justification).
 
-### Medium (5-6 tools)
-- 5–6 branches OR 3–4 branches with at least one nested condition.
+### Medium (4-5 tools)
+- 3–4 branches OR 2–3 branches with at least one nested condition.
 - At least one branch MUST include a 2+ tool dependency chain (Tool A output feeds Tool B params).
 - Include at least one realistic constraint: opening hours, distance, budget, rating threshold, time zone, pagination, schema field type.
 
-### Hard (7+ tools or 3+ servers)
-- 7+ tools (or 3+ servers) with **multi-level branching** (at least 2 nested layers) AND an aggregation step.
+### Hard (6+ tools or 2+ servers)
+- 6+ tools (or 2+ servers) with **multi-level branching** (at least 2 nested layers) AND an aggregation step.
 - Include at least two independent conditions (e.g., weather + opening hours; availability + rating; schema type + time range).
 - The final output MUST combine results across branches (e.g., “best choice” + “fallback plan” + “explain which branch triggered”).
 
@@ -100,6 +100,18 @@ Natural-language conditions without explicit mapping to tool outputs are STRICTL
 - **Target Bucket**: {{target_bucket}}
 - **Difficulty Level**: {{difficulty}}
 - **Tool Definitions**: {{tool_descriptions}}
+
+## ANALYTICS Bucket: Airtable Data Constraints
+
+**CRITICAL**: If the bucket is `ANALYTICS`, all Airtable-based tasks MUST only reference the following three pre-existing datasets. Do NOT invent other bases or tables.
+
+| Base Name | Table Name | Key Fields |
+|---|---|---|
+| `Oncology Drug Pipeline` | `Oncology Trials` | TrialID, DrugName, Phase (Phase 1/2/3/Phase 4), TherapeuticArea, Status, Sponsor, NCTNumber, StartDate, EndDate, Country |
+| `Marketing Analytics Hub` | `Campaign Performance` | CampaignID, CampaignName, Channel, Region, StartDate, EndDate, Budget_USD, Spend_USD, Impressions, Clicks, Conversions, Revenue_USD, Status |
+| `Supply Chain Analytics` | `Supplier Registry` | SupplierID, SupplierName, Category, Country, AnnualValue_USD, PaymentTermsDays, QualityScore, DeliveryOnTime_Pct, DefectRate_Pct, TierLevel, CertISO, RiskLevel |
+
+Tasks must use field names exactly as listed above.
 
 # Step 1: Tool Chain Analysis
 
@@ -193,23 +205,20 @@ Before generating, verify:
           execution_log.append(f"Condition A value: {condition_A}")
 
           # 2. 条件分支
-          # ⚠️ 分支日志格式固定：必须写 "Branch X triggered" (X为大写字母A/B/C/D)
-          # 这与 claims 里的 branch 字段值（"A"/"B"/"C"/"D"）对应，用于评分时的分支匹配
           if condition_A:
-              execution_log.append("Branch A triggered")  # ✅ 固定格式：Branch + 大写字母 + triggered
+              execution_log.append(f"Branch A triggered: condition_A = {condition_A}")
               execution_log.append("Step 2: Calling tool 'server_a_tool_a'")
               raw_a = call_tool('server_a_tool_a', {'input': condition_A})
               execution_log.append(f"[RAW] {str(raw_a)[:200]}")
               branch_a_data = json.loads(raw_a) if isinstance(raw_a, str) else raw_a
               result = {'branch': 'A', 'data': branch_a_data.get('result', branch_a_data)}
           elif condition_A is not None:
-              execution_log.append("Branch B triggered")  # ✅ 固定格式
+              execution_log.append(f"Branch B triggered")
               raw_b = call_tool('server_b_tool_b', {'input': 'value'})
               execution_log.append(f"[RAW] {str(raw_b)[:200]}")
               branch_b_data = json.loads(raw_b) if isinstance(raw_b, str) else raw_b
               result = {'branch': 'B', 'data': branch_b_data.get('result', branch_b_data)}
           else:
-              execution_log.append("Branch C triggered")  # ✅ 固定格式
               result = {'branch': 'C', 'data': None}
 
           # 3. 聚合结果
@@ -291,21 +300,36 @@ Before generating, verify:
   ```
 
   **示例（代码仓库/Git 操作类任务）**：
+
+  **⚠️ 可用 Git 仓库（CRITICAL）**：CODING bucket 的任务只能操作以下仓库，路径前缀为 `/data/repos/`：
+  - `/data/repos/balldontlie-mcp` — NBA/sports data MCP server (Node.js/TypeScript)
+  - `/data/repos/mcp-server-calculator` — Calculator MCP server (Node.js)
+  - `/data/repos/metmuseum-mcp` — Met Museum MCP server (TypeScript)
+  - `/data/repos/mongodb-mcp-server` — MongoDB MCP server (TypeScript)
+  - `/data/repos/slackr` — Slack MCP server (R)
+  - `/data/repos/snake-game` — Snake game (Python)
+  - `/data/repos/storyteller` — Storyteller app (TypeScript)
+  - `/data/repos/tree-sitter-diff` — Tree-sitter diff grammar (C)
+
+  **每次生成任务时必须从上述列表中随机选择一个仓库**，不得总是使用同一个仓库。
+
+  任务中 **禁止** 引用上述列表以外的仓库路径。
+
   ```json
   "state_assertions": [
     {
-      "description": "New file /data/repo/feature.py was created",
-      "code": "os.path.exists('/data/repo/feature.py')",
+      "description": "New file /data/repos/<chosen-repo>/feature.py was created",
+      "code": "os.path.exists('/data/repos/<chosen-repo>/feature.py')",
       "expected": true
     },
     {
       "description": "feature.py contains the expected function definition",
-      "code": "re.search(r'def\\s+process_data', open('/data/repo/feature.py').read()) is not None",
+      "code": "re.search(r'def\\s+process_data', open('/data/repos/<chosen-repo>/feature.py').read()) is not None",
       "expected": true
     },
     {
       "description": "config.json has been updated with new_key field",
-      "code": "'new_key' in json.loads(open('/data/repo/config.json').read())",
+      "code": "'new_key' in json.loads(open('/data/repos/<chosen-repo>/config.json').read())",
       "expected": true
     }
   ]
@@ -329,7 +353,7 @@ Generate a SINGLE JSON object strictly following this schema:
     // For STATELESS buckets (not PRODUCTIVITY/CODING): use strategy="dynamic_script"
     // For STATEFUL buckets (PRODUCTIVITY or CODING): use strategy="state_check"
     "strategy": "dynamic_script",  // or "state_check" for PRODUCTIVITY/CODING buckets
-    "dynamic_reference_script": "def generate_reference_answer():\n    import json\n    from mcp_client import call_tool\n\n    execution_log = []\n\n    # ✅ 调用格式：call_tool('完整工具名', {参数dict})，工具名来自 available_tools 列表\n    # ❌ 禁止三参数写法 call_tool('server', 'tool', args)\n    execution_log.append(\"Step 1: Calling tool 'server_name_tool_name'\")\n    raw1 = call_tool('server_name_tool_name', {'param': 'value'})\n    execution_log.append(f\"[RAW] {str(raw1)[:200]}\")\n    signal_data = json.loads(raw1) if isinstance(raw1, str) else raw1\n\n    # 防御性访问字段（不假设字段一定存在）\n    condition_val = signal_data.get('condition_field', None)\n    execution_log.append(f\"Condition value: {condition_val}\")\n\n    # 条件分支 ⚠️ 每个分支入口必须写 execution_log.append(\"Branch X triggered\")\n    if condition_val:\n        execution_log.append(\"Branch A triggered\")\n        raw2 = call_tool('server_a_tool_a', {'input': condition_val})\n        execution_log.append(f\"[RAW] {str(raw2)[:200]}\")\n        branch_data = json.loads(raw2) if isinstance(raw2, str) else raw2\n        result = branch_data.get('result', branch_data)\n    else:\n        execution_log.append(\"Branch B triggered\")\n        raw2 = call_tool('server_b_tool_b', {'input': 'value'})\n        execution_log.append(f\"[RAW] {str(raw2)[:200]}\")\n        branch_data = json.loads(raw2) if isinstance(raw2, str) else raw2\n        result = branch_data.get('result', branch_data)\n\n    execution_log.append(f\"Final result: {str(result)[:300]}\")\n    return \"\\n\".join(execution_log)",
+    "dynamic_reference_script": "def generate_reference_answer():\n    import json\n    from mcp_client import call_tool\n\n    execution_log = []\n\n    # ✅ 调用格式：call_tool('完整工具名', {参数dict})，工具名来自 available_tools 列表\n    # ❌ 禁止三参数写法 call_tool('server', 'tool', args)\n    execution_log.append(\"Step 1: Calling tool 'server_name_tool_name'\")\n    raw1 = call_tool('server_name_tool_name', {'param': 'value'})\n    execution_log.append(f\"[RAW] {str(raw1)[:200]}\")\n    signal_data = json.loads(raw1) if isinstance(raw1, str) else raw1\n\n    # 防御性访问字段（不假设字段一定存在）\n    condition_val = signal_data.get('condition_field', None)\n    execution_log.append(f\"Condition value: {condition_val}\")\n\n    # 条件分支\n    if condition_val:\n        raw2 = call_tool('server_a_tool_a', {'input': condition_val})\n        execution_log.append(f\"[RAW] {str(raw2)[:200]}\")\n        branch_data = json.loads(raw2) if isinstance(raw2, str) else raw2\n        result = branch_data.get('result', branch_data)\n    else:\n        raw2 = call_tool('server_b_tool_b', {'input': 'value'})\n        execution_log.append(f\"[RAW] {str(raw2)[:200]}\")\n        branch_data = json.loads(raw2) if isinstance(raw2, str) else raw2\n        result = branch_data.get('result', branch_data)\n\n    execution_log.append(f\"Final result: {str(result)[:300]}\")\n    return \"\\n\".join(execution_log)",
     // For STATELESS buckets: state_assertions MUST be []
     // For STATEFUL buckets (PRODUCTIVITY/CODING): state_assertions MUST be non-empty (see format below)
     // Each assertion is: {"description": "...", "code": "<python eval() expression>", "expected": true/false}
@@ -356,14 +380,14 @@ Generate a SINGLE JSON object strictly following this schema:
       "description": "IF condition is true, use Tool A chain",
       "required_tool": "tool_a",
       "dependency_on_step": 1,
-      "branch": "A"  // ⚠️ CRITICAL: 必须是单大写字母 A/B/C/D，与脚本日志 "Branch A triggered" 精确匹配
+      "branch": "branch_a"
     },
     {
       "step": 3,
       "description": "ELSE use Tool B chain",
       "required_tool": "tool_b",
       "dependency_on_step": 1,
-      "branch": "B"  // ⚠️ CRITICAL: 单大写字母，禁止用 "branch_b"、"low_volume" 等语义名称
+      "branch": "branch_b"
     },
     {
       "step": 4,
@@ -375,22 +399,6 @@ Generate a SINGLE JSON object strictly following this schema:
   ]
 }
 ```
-
-## ⚠️ CRITICAL: Branch Naming Convention（分支命名规范，必须遵守）
-
-**`claims` 里的 `branch` 字段值 MUST 与 `dynamic_reference_script` 日志中的分支标识严格一致。**
-
-规则：
-- `dynamic_reference_script` 中，每个分支入口 **必须** 写：`execution_log.append("Branch X triggered")`
-  - X 为大写字母：`A`、`B`、`C`、`D`（以此类推）
-- `claims` 中对应步骤的 `branch` 字段 **必须** 填写对应的单大写字母：`"A"`、`"B"`、`"C"`、`"D"`
-- **严禁** 使用语义名称（如 `"high_volume"`、`"branch_a"`、`"low_count"`）作为 `branch` 字段值
-
-| ✅ 正确 | ❌ 错误 |
-|---|---|
-| `"branch": "A"` + 日志 `"Branch A triggered"` | `"branch": "high_volume"` |
-| `"branch": "B"` + 日志 `"Branch B triggered"` | `"branch": "branch_b"` |
-| `"branch": "C"` + 日志 `"Branch C triggered"` | `"branch": "low_count"` |
 
 # Quality Checklist Before Submission
 
@@ -406,14 +414,12 @@ Generate a SINGLE JSON object strictly following this schema:
 - [ ] Function returns a string containing all execution records and tool call results (for LLM reference answer generation)
 - [ ] `available_tools` includes ALL tools from all servers used (not just required tools)
 - [ ] Claims section lists all branches explicitly
-- [ ] **[CRITICAL]** Every claim with a `branch` field uses a **single uppercase letter** (`"A"`, `"B"`, `"C"`, `"D"`) — NOT semantic names like `"high_volume"`, `"branch_a"`, `"low_count"`
-- [ ] **[CRITICAL]** `dynamic_reference_script` logs each branch entry as `execution_log.append("Branch X triggered")` where X matches the claim `branch` letter exactly
 - [ ] `dynamic_reference_script` 中所有 `call_tool` 均使用**两参数**格式：`call_tool("完整工具名", {参数dict})`，工具名来自 `available_tools` 列表，❌ 禁止 `call_tool('server', 'tool', args)` 三参数写法
 - [ ] `dynamic_reference_script` 中所有字段访问均使用 `.get()` 防御性写法，❌ 禁止 `data['field']` 直接索引
 - [ ] `dynamic_reference_script` 中所有文件路径均以 `/data/` 开头，❌ 禁止使用 `/tmp/`、`/var/`、`/project/`、`/home/` 等沙箱外路径
 - [ ] **[有状态 bucket 专项]** 若 `bucket` 为 `PRODUCTIVITY` 或 `CODING`：`strategy` 必须为 `state_check`，`state_assertions` **不可为空数组**，至少包含 2-3 条断言
 - [ ] **[有状态 bucket 专项]** `state_assertions` 中每条断言的 `code` 字段是纯 Python 表达式（可被 `eval()` 直接执行），只使用 `os`/`json`/`re`，不含 `import`/赋值/多行语句
-- [ ] **[有状态 bucket 专项]** `state_assertions` 中的文件路径均以 `/data/` 开头
+- [ ] **[有状态 bucket 专项]** `state_assertions` 中的文件路径均以 `/data/` 开头；Git 仓库操作路径必须以 `/data/repos/<repo-name>/` 开头，且 `<repo-name>` 必须是可用仓库列表中的一个
 - [ ] **[有状态 Reasoning Trap 专项]** `state_assertions` 应包含"正确分支产生的文件存在"和"错误分支的文件不存在（expected: false）"两类断言
 - [ ] **[无状态 bucket 专项]** 若 `bucket` 不是 `PRODUCTIVITY`/`CODING`：`strategy` 必须为 `dynamic_script`，`state_assertions` 必须为 `[]`
 
