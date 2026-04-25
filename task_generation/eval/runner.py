@@ -36,6 +36,108 @@ logger = logging.getLogger(__name__)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Docker /data 快照工具（用于任务间状态隔离）
+# ──────────────────────────────────────────────────────────────────────────────
+
+import shutil
+import subprocess as _sp
+
+# 排除 mcp_code_executor_workspace（venv 缓存，255M，不影响任务状态）
+_SNAPSHOT_EXCLUDE = "/data/repos/mcp_code_executor_workspace"
+_SNAPSHOT_PATH_IN_CONTAINER = "/tmp/_hallu_eval_snapshot.tar.gz"
+
+
+def _docker_cmd() -> str:
+    """返回 docker 可执行文件路径（兼容 macOS Docker Desktop）。"""
+    candidates = [
+        "docker",
+        "/Volumes/Docker/Docker.app/Contents/Resources/bin/docker",
+        "/usr/local/bin/docker",
+        "/opt/homebrew/bin/docker",
+    ]
+    for c in candidates:
+        if shutil.which(c):
+            return c
+    return "docker"
+
+
+def _get_container_name() -> Optional[str]:
+    """返回当前运行的 agent-environment 容器名（优先精确匹配 image 名）。"""
+    docker = _docker_cmd()
+    try:
+        out = _sp.check_output(
+            [docker, "ps", "--format", "{{.Names}}\t{{.Image}}"],
+            stderr=_sp.DEVNULL,
+            timeout=10,
+        ).decode()
+        for line in out.splitlines():
+            parts = line.split("\t")
+            if len(parts) == 2 and "agent-environment" in parts[1]:
+                return parts[0].strip()
+    except Exception:
+        pass
+    return None
+
+
+def docker_snapshot_create(container: str) -> bool:
+    """在容器内对 /data 创建 tar 快照（排除大型 venv 缓存）。
+
+    快照保存在容器的 /tmp 中，耗时约 800ms（~23MB 压缩包）。
+    返回 True 表示成功。
+    """
+    docker = _docker_cmd()
+    cmd = (
+        f"tar -czf {_SNAPSHOT_PATH_IN_CONTAINER} "
+        f"--exclude={_SNAPSHOT_EXCLUDE} /data 2>/dev/null && echo OK"
+    )
+    try:
+        t0 = _sp.check_output(
+            [docker, "exec", container, "sh", "-c", cmd],
+            stderr=_sp.PIPE,
+            timeout=60,
+        ).decode().strip()
+        ok = (t0 == "OK")
+        if ok:
+            logger.info(f"[snapshot] /data 快照已创建 → {_SNAPSHOT_PATH_IN_CONTAINER}")
+        else:
+            logger.warning(f"[snapshot] 快照创建疑似失败，输出: {t0!r}")
+        return ok
+    except Exception as e:
+        logger.warning(f"[snapshot] 创建快照失败: {e}")
+        return False
+
+
+def docker_snapshot_restore(container: str) -> bool:
+    """将容器内 /tmp 中的 /data 快照恢复到 /data（覆盖写）。
+
+    恢复耗时约 250ms，彻底清除任务执行产生的所有副作用。
+    返回 True 表示成功。
+    """
+    docker = _docker_cmd()
+    # 先删掉现有 /data，再解包——确保删掉多余文件
+    cmd = (
+        f"test -f {_SNAPSHOT_PATH_IN_CONTAINER} && "
+        f"find /data -mindepth 1 -not -path '{_SNAPSHOT_EXCLUDE}/*' -delete 2>/dev/null; "
+        f"tar -xzf {_SNAPSHOT_PATH_IN_CONTAINER} -C / 2>/dev/null && echo OK"
+    )
+    try:
+        out = _sp.check_output(
+            [docker, "exec", container, "sh", "-c", cmd],
+            stderr=_sp.PIPE,
+            timeout=60,
+        ).decode().strip()
+        ok = out.endswith("OK")
+        if ok:
+            logger.info("[snapshot] /data 已从快照恢复")
+        else:
+            logger.warning(f"[snapshot] 恢复快照疑似失败，输出: {out!r}")
+        return ok
+    except Exception as e:
+        logger.warning(f"[snapshot] 恢复快照失败: {e}")
+        return False
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # LLM Judge 客户端构建
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -339,6 +441,7 @@ async def run_full_pipeline(
     num_tasks: Optional[int] = None,
     pass_threshold: float = 0.6,
     json_output_dir: Optional[str] = None,
+    use_docker_snapshot: bool = False,
 ) -> pd.DataFrame:
     """End-to-end pipeline: JSONL → Agent execution → per-task GT + scoring → CSV + JSON。
 
@@ -355,7 +458,9 @@ async def run_full_pipeline(
 
     参数
     ----
-    json_output_dir : 单任务 JSON 输出目录；None 则放在 output_csv 同目录的 task_results/
+    json_output_dir      : 单任务 JSON 输出目录；None 则放在 output_csv 同目录的 task_results/
+    use_docker_snapshot  : True 时在每条任务执行前恢复 /data 快照，实现任务间状态隔离；
+                           此模式下 concurrency 强制为 1（串行执行）。
     """
     tasks = load_tasks_from_jsonl(jsonl_path)
     if num_tasks:
@@ -374,7 +479,25 @@ async def run_full_pipeline(
 
     orig_cwd = os.getcwd()
 
-    # ── Step 1: Agent 执行 ───────────────────────────────────────────────────
+    # ── Docker 快照初始化 ────────────────────────────────────────────────────
+    _snapshot_container: Optional[str] = None
+    if use_docker_snapshot:
+        concurrency = 1  # 快照模式必须串行
+        _snapshot_container = _get_container_name()
+        if _snapshot_container:
+            ok = docker_snapshot_create(_snapshot_container)
+            if ok:
+                logger.info(
+                    f"[snapshot] 已对容器 {_snapshot_container!r} 的 /data 创建初始快照，"
+                    "每条任务执行前将自动恢复"
+                )
+            else:
+                logger.warning("[snapshot] 初始快照创建失败，将不做状态隔离")
+                _snapshot_container = None
+        else:
+            logger.warning("[snapshot] 未找到运行中的 agent-environment 容器，快照模式已降级")
+
+    # ── Step 1: Agent 执行（支持快照模式逐条串行） ────────────────────────────
     try:
         os.chdir(MCP_ATLAS_EVAL_DIR)
         (MCP_ATLAS_EVAL_DIR / "completion_results").mkdir(exist_ok=True)
@@ -388,8 +511,25 @@ async def run_full_pipeline(
         spec.loader.exec_module(mcp_mod)
         mcp_mod.SERVER_URL = server_url
 
-        async with mcp_mod.AsyncMCPTrajectoryGenerator(model) as gen:
-            await gen.evaluate_dataset_async(tasks_df, str(completion_csv_path), None, concurrency)
+        if _snapshot_container:
+            # ── 快照模式：逐条任务，执行前恢复 /data ──────────────────────
+            async with mcp_mod.AsyncMCPTrajectoryGenerator(model) as gen:
+                for task_idx, (_, row) in enumerate(tasks_df.iterrows()):
+                    task_id = row.get("TASK", f"task_{task_idx}")
+                    logger.info(
+                        f"[snapshot] 恢复 /data 初始状态（任务 {task_idx+1}/{len(tasks_df)}: {task_id}）"
+                    )
+                    docker_snapshot_restore(_snapshot_container)
+                    single_row_df = pd.DataFrame([row.to_dict()])
+                    await gen.evaluate_dataset_async(
+                        single_row_df, str(completion_csv_path), None, 1
+                    )
+        else:
+            # ── 普通并发模式 ───────────────────────────────────────────────
+            async with mcp_mod.AsyncMCPTrajectoryGenerator(model) as gen:
+                await gen.evaluate_dataset_async(
+                    tasks_df, str(completion_csv_path), None, concurrency
+                )
 
     except Exception as e:
         logger.error(f"Agent 执行失败: {e}，将以空轨迹评分")
@@ -408,6 +548,10 @@ async def run_full_pipeline(
         pd.DataFrame(empty).to_csv(completion_csv_path, index=False)
     finally:
         os.chdir(orig_cwd)
+        # 快照模式结束后恢复一次，保持容器干净状态
+        if _snapshot_container:
+            logger.info("[snapshot] 所有任务完成，恢复容器 /data 到初始状态")
+            docker_snapshot_restore(_snapshot_container)
 
     # ── Step 2: 逐任务 GT 生成 + 打分 ────────────────────────────────────────
     result_df = evaluate_from_completion_csv(

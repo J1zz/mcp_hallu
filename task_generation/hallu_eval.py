@@ -77,6 +77,16 @@ def _parse_args():
         dest="jsonl_for_gt",
         help="搭配 --from-completion-csv 使用：指定原始 JSONL 文件，为 dynamic_script 任务提供 GT 脚本（默认从 --input 取）",
     )
+    p.add_argument(
+        "--docker-snapshot",
+        action="store_true",
+        dest="docker_snapshot",
+        help=(
+            "开启 Docker /data 快照隔离模式：在每条任务执行前自动恢复容器 /data 到初始状态，"
+            "彻底消除任务间状态污染。此模式下并发数自动降为 1（串行执行）。"
+            "快照/恢复各耗时约 1s，476 条任务总额外开销约 8 分钟。"
+        ),
+    )
     return p.parse_args()
 
 
@@ -139,6 +149,7 @@ def main():
         num_tasks=args.num_tasks,
         pass_threshold=args.pass_threshold,
         json_output_dir=args.json_output_dir,
+        use_docker_snapshot=args.docker_snapshot,
     ))
 
 
