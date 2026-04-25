@@ -400,6 +400,26 @@ Generate a SINGLE JSON object strictly following this schema:
 }
 ```
 
+## ⚠️ CRITICAL: Branch Naming Convention（分支命名规范，必须遵守）
+
+**`claims` 里的 `branch` 字段值 MUST 与 `dynamic_reference_script` 日志中的分支标识严格一致。**
+
+规则：
+- `dynamic_reference_script` 中，每个分支入口 **必须** 写：`execution_log.append("Branch X triggered")`
+  - X 为大写字母：`A`、`B`、`C`、`D`（以此类推）
+- `claims` 中对应步骤的 `branch` 字段 **必须** 填写对应的单大写字母：`"A"`、`"B"`、`"C"`、`"D"`
+- **严禁** 使用语义名称（如 `"high_volume"`、`"branch_a"`、`"low_count"`）作为 `branch` 字段值
+- **严禁** 使用子分支格式（如 `"A.1"`、`"A1"`、`"B.2"`、`"B1"` 等）—— **只允许单个大写字母**
+- 嵌套条件内的子步骤（即父分支 A 内部的二级条件步骤）**不应设置 `branch` 字段**，应置为 `null`
+
+| ✅ 正确 | ❌ 错误 |
+|---|---|
+| `"branch": "A"` + 日志 `"Branch A triggered"` | `"branch": "high_volume"` |
+| `"branch": "B"` + 日志 `"Branch B triggered"` | `"branch": "branch_b"` |
+| `"branch": "C"` + 日志 `"Branch C triggered"` | `"branch": "low_count"` |
+| `"branch": null`（嵌套子步骤）| `"branch": "A.1"` |
+| `"branch": null`（嵌套子步骤）| `"branch": "B1"` |
+| `"branch": null`（嵌套子步骤）| `"branch": "A2"` |
 # Quality Checklist Before Submission
 
 - [ ] Task instruction contains explicit "if...then...else" or equivalent structure
@@ -414,6 +434,9 @@ Generate a SINGLE JSON object strictly following this schema:
 - [ ] Function returns a string containing all execution records and tool call results (for LLM reference answer generation)
 - [ ] `available_tools` includes ALL tools from all servers used (not just required tools)
 - [ ] Claims section lists all branches explicitly
+- [ ] **[CRITICAL]** Every claim with a `branch` field uses a **single uppercase letter** (`"A"`, `"B"`, `"C"`, `"D"`) — NOT semantic names like `"high_volume"`, `"branch_a"`, `"low_count"`
+- [ ] **[CRITICAL]** NO sub-branch notation: `"A.1"`, `"B1"`, `"A2"`, `"B.2"` etc. are ALL forbidden — nested sub-steps within a parent branch MUST use `"branch": null`
+- [ ] **[CRITICAL]** `dynamic_reference_script` logs each branch entry as `execution_log.append("Branch X triggered")` where X matches the claim `branch` letter exactly
 - [ ] `dynamic_reference_script` 中所有 `call_tool` 均使用**两参数**格式：`call_tool("完整工具名", {参数dict})`，工具名来自 `available_tools` 列表，❌ 禁止 `call_tool('server', 'tool', args)` 三参数写法
 - [ ] `dynamic_reference_script` 中所有字段访问均使用 `.get()` 防御性写法，❌ 禁止 `data['field']` 直接索引
 - [ ] `dynamic_reference_script` 中所有文件路径均以 `/data/` 开头，❌ 禁止使用 `/tmp/`、`/var/`、`/project/`、`/home/` 等沙箱外路径

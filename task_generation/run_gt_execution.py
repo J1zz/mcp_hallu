@@ -107,6 +107,33 @@ def _parse_result(raw: Any) -> Any:
 # 不在此表中注册，任务设计层面应避免在 GT 脚本中使用。
 COMPENSATION_MAP: Dict[str, Callable] = {
 
+    # ── 文件系统写操作（最常见，memory/reasoning 任务大量使用）────────────────
+    # 写文件 → 删除该文件（若文件在任务前不存在则删除即可还原；若已存在则会误删）
+    # 注意：此处采用「删除」语义，适合 GT 脚本创建新文件的场景。
+    # 若任务是「覆盖已有文件」，删除会改变状态——但 GT 脚本通常创建新文件，风险可接受。
+    "desktop-commander_write_file": lambda args, res: (
+        "desktop-commander_delete_file",
+        {"path": args.get("path")},
+    ) if args.get("path") else None,
+
+    "filesystem_write_file": lambda args, res: (
+        "filesystem_delete_file",
+        {"path": args.get("path")},
+    ) if args.get("path") else None,
+
+    "desktop-commander_edit_block": lambda args, res: None,  # 覆盖编辑无法自动逆向，跳过
+
+    # 创建目录 → 删除该目录（仅在目录为空时有效；若任务往里写了文件则先被上面规则回滚）
+    "desktop-commander_create_directory": lambda args, res: (
+        "desktop-commander_delete_file",  # desktop-commander 用 delete_file 删目录
+        {"path": args.get("path")},
+    ) if args.get("path") else None,
+
+    "filesystem_create_directory": lambda args, res: (
+        "filesystem_delete_directory",
+        {"path": args.get("path"), "recursive": True},
+    ) if args.get("path") else None,
+
     # ── Airtable ──────────────────────────────────────────────────────────────
     "airtable_create_record": lambda args, res: (
         "airtable_delete_record",
@@ -344,9 +371,15 @@ def _run_state_check_gt(
         if not code:
             continue
 
+        import os as _os_mod
+        import re as _re_mod
+        from pathlib import Path as _Path
         namespace: Dict[str, Any] = {
             "__builtins__": __builtins__,
-            "json": json,
+            "json":     json,
+            "os":       _os_mod,
+            "re":       _re_mod,
+            "Path":     _Path,
             "call_tool": _call_tool,
         }
         try:

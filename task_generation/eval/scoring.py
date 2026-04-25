@@ -459,9 +459,33 @@ def _score_void_trap_step_based(
     - 未识别则全 0
     """
     QUIT_KEYWORDS = [
-        "cannot", "can't", "unable to", "not possible", "no tool",
+        # 直接否定
+        "cannot", "can't", "can not", "unable to", "not possible", "no tool",
         "not available", "unsolvable", "无法", "不能", "没有工具", "不支持",
         "does not exist", "not exist", "no such tool",
+        # 间接/礼貌性拒绝（Agent 常用措辞）
+        "unfortunately", "i'm sorry", "i am sorry",
+        "there is no ", "there are no ", "no records", "appears that there is no",
+        "appears there is no", "appears to be no",
+        "not found", "could not find", "couldn't find",
+        "i don't have", "i do not have", "i currently do not",
+        "doesn't support", "don't support", "does not support",
+        "not able to", "not able",
+        "no such", "failed to", "this functionality",
+        "feature is not", "not supported",
+        "i currently cannot", "currently, i cannot",
+        "it seems there are no", "it seems there is no",
+        "it seems that no", "it seems there were no",
+        "seems i cannot", "seems that .* no",
+        "no results", "no papers", "no matches",
+        "no .* available", "no .* found",
+        "do not appear to", "does not appear to",
+        "appears to have no", "appear to have no",
+        "were not found", "was not found",
+        "preventing me from", "security restrictions", "restricted from",
+        # 权限/访问受限
+        "permission denied", "access denied", "not authorized",
+        "403", "401", "rate limit", "exceeded",
     ]
     steps      = len(agent_tool_calls)
     quit_found = any(kw in agent_response.lower() for kw in QUIT_KEYWORDS)
@@ -678,9 +702,15 @@ def score_state_assertions(
         if not code:
             continue
 
+        import os as _os_mod
+        import re as _re_mod
+        from pathlib import Path as _Path
         namespace: Dict[str, Any] = {
             "__builtins__": __builtins__,
-            "json": json,
+            "json":     json,
+            "os":       _os_mod,
+            "re":       _re_mod,
+            "Path":     _Path,
             "call_tool": _call_tool,
         }
         try:

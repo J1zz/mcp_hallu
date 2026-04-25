@@ -212,7 +212,7 @@ Generate a SINGLE JSON object strictly following this schema:
       "description": "IF condition met: execute Branch A tool chain",
       "required_tool": "tool_a",
       "dependency_on_step": 1,
-      "branch": "A"  // ⚠️ CRITICAL: 必须是单大写字母 A/B/C/D，禁止用 "branch_a"、"high_volume" 等语义名称
+      "branch": "A"  // ⚠️ CRITICAL: 必须是单大写字母 A/B/C/D，禁止用 "branch_a"、"high_volume" 等语义名称，更禁止用 "A.1"、"A1" 等子分支格式
     },
     {
       "step": 3,
@@ -245,7 +245,7 @@ Generate a SINGLE JSON object strictly following this schema:
 - [ ] `ground_truth.dynamic_reference_script` is exactly `""`
 - [ ] `ground_truth.state_assertions` has at least 3 entries
 - [ ] At least one assertion has `expected: false` (wrong branch file must NOT exist)
-- [ ] Every assertion `code` is a single-line Python expression using only `os`/`json`/`re`
+- [ ] Every assertion `code` follows the `def check(): ... result = check()` multi-line pattern (executed via `exec()`, NOT `eval()`)
 - [ ] Every file path in assertions starts with `/data/`
 - [ ] Task instruction explicitly names the output file path for each branch
 - [ ] `available_tools` includes at least one write tool (filesystem/desktop-commander)
@@ -254,3 +254,4 @@ Generate a SINGLE JSON object strictly following this schema:
 - [ ] Condition is concrete and decidable from tool output fields
 - [ ] Wrong branch selection produces a different (verifiably absent) file
 - [ ] **[CRITICAL]** Every claim with a `branch` field uses a **single uppercase letter** (`"A"`, `"B"`, `"C"`, `"D"`) — NOT semantic names like `"high_volume"`, `"branch_a"`, `"low_count"`
+- [ ] **[CRITICAL]** NO sub-branch notation: `"A.1"`, `"B1"`, `"A2"`, `"B.2"` etc. are ALL forbidden — nested sub-steps within a parent branch MUST use `"branch": null`
