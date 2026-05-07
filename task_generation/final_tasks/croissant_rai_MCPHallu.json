@@ -6,12 +6,20 @@
     "cr": "http://mlcommons.org/croissant/",
     "rai": "http://mlcommons.org/croissant/RAI/",
     "dct": "http://purl.org/dc/terms/",
-    "ml": "http://mlcommons.org/schema/"
+    "ml": "http://mlcommons.org/schema/",
+    "containsSyntheticData": "cr:containsSyntheticData",
+    "sourceDatasets": "cr:sourceDatasets",
+    "provenanceActivities": "cr:provenanceActivities",
+    "activityType": "cr:activityType",
+    "isLiveDataset": "cr:isLiveDataset",
+    "FileObject": "sc:FileObject",
+    "FileSet": "sc:FileSet",
+    "prov": "http://www.w3.org/ns/prov#"
   },
   "@type": "sc:Dataset",
   "conformsTo": "http://mlcommons.org/croissant/1.1",
   "name": "MCPHallu",
-  "description": "MCPHallu is a benchmark for diagnosing hallucinations in MCP (Model Context Protocol) agents along three axes: reasoning, execution, and memory. It contains 358 tasks and 5,830 agent trajectories across five capability domains (General, Analytics, Productivity, Financial, Coding) and four hallucination subtypes (Branch Collapse, Unreachable Goal, Tool Misuse, Context Forgetting), evaluated against 36 production MCP servers running in isolated Docker containers.",
+  "description": "MCPHallu is a benchmark for diagnosing hallucinations in MCP (Model Context Protocol) agents along three axes: reasoning, execution, and memory. It contains 358 tasks across five capability domains (General, Analytics, Productivity, Financial, Coding) and four hallucination subtypes (Branch Collapse, Unreachable Goal, Tool Misuse, Context Forgetting), evaluated against 36 production MCP servers running in isolated Docker containers.",
   "url": "https://anonymous.4open.science/r/mcp_hallu",
   "license": "https://opensource.org/licenses/MIT",
   "version": "1.0.0",
@@ -24,23 +32,19 @@
     "evaluation",
     "NeurIPS 2026"
   ],
-  "cr:isLiveDataset": false,
-  "rai:dataCollection": "Tasks were constructed in three stages: (1) tool grounding from live MCP server schemas, (2) adversarial synthesis using Claude Sonnet 4.6 with subtype-specific prompts, and (3) automated filtering plus expert review by three annotators with 2+ years of LLM agent evaluation experience.",
+  "isLiveDataset": false,
+  "rai:dataCollection": "Tasks were constructed in four stages: (1) tool grounding — tool names, parameter schemas, and return-value specifications were extracted from 36 live MCP servers via the MCP list-tools endpoint; (2) adversarial synthesis — Claude Sonnet 4.6 was prompted with subtype-specific templates to generate candidate tasks targeting one of four hallucination subtypes; (3) automated filtering and ground-truth execution — candidates were screened on five criteria (executability, hallucination coverage, self-containedness, non-triviality, label consistency via a separate GPT-4o solver run 5 times per task), and dynamic reference scripts were executed against live servers to produce verified ground-truth logs with write-operation rollback; (4) expert review by three annotators with 2+ years of LLM agent evaluation experience, each independently rating task realism, label correctness, and ground-truth validity on a 3-point scale (accepted if ≥2 on all criteria from ≥2 of 3 annotators).",
   "rai:dataCollectionType": "Programmatic/API",
   "rai:dataUseCases": "Benchmarking and diagnosing hallucination failure modes in LLM-based MCP agents; subtype-level attribution of reasoning, execution, and memory failures.",
   "rai:dataBiases": "The 36 MCP servers are English-language and primarily target Western SaaS APIs (GitHub, Notion, Slack, etc.). Findings may not generalize to regional services or non-English-language tools.",
   "rai:personalSensitiveInformation": "No personal or sensitive information. All tasks are synthetic and constructed from public MCP server tool schemas.",
   "rai:dataLimitations": "MCPHallu covers 36 English-language MCP servers from five capability domains; generalisation to non-English, regional, or enterprise-internal tool sets is not validated. The benchmark targets agentic hallucination specifically and is not designed for assessing raw language understanding, knowledge retrieval, or single-turn QA. Model scores reflect behaviour in an isolated Docker environment and may differ under production deployments with real user data, rate-limited APIs, or multi-user concurrency. This dataset is not recommended as a sole safety evaluation for deployment decisions.",
   "rai:dataSocialImpact": "Positive impacts: MCPHallu enables systematic identification of failure modes in MCP agents, helping developers detect and mitigate hallucinations before deployment, which can improve reliability and user trust in AI-assisted workflows. Negative impacts / risks: Publishing detailed adversarial task patterns could be misused to craft inputs that intentionally trigger agent failures. To mitigate this risk, task prompts are framed as diagnostic stimuli rather than jailbreak instructions, and the repository is released under a permissive open-source licence that requires attribution. No specific demographic group is disproportionately harmed by dataset misuse.",
-  "dct:source": [
-    {
-      "@type": "dct:Dataset",
-      "name": "MCP Server Tool Schemas",
-      "description": "Tool name and parameter schemas scraped from 36 production MCP servers (GitHub, Notion, Slack, Airtable, etc.) via the MCP list-tools API.",
-      "url": "https://github.com/modelcontextprotocol/servers"
-    }
+  "containsSyntheticData": true,
+  "sourceDatasets": [
+    "https://github.com/modelcontextprotocol/servers"
   ],
-  "cr:provenanceActivities": [
+  "provenanceActivities": [
     {
       "@type": "cr:Activity",
       "name": "Tool Schema Collection",
@@ -56,7 +60,7 @@
     {
       "@type": "cr:Activity",
       "name": "Automated Filtering",
-      "description": "Generated tasks were automatically filtered to remove duplicates, malformed JSON, and tasks that violated length or tool-coverage constraints. Tasks without at least one valid MCP tool call in the ground truth were discarded.",
+      "description": "Generated tasks were automatically filtered on five criteria: (1) Executability — every tool listed in required_tools exists in the catalog and accepts the referenced parameter schema; (2) Hallucination coverage — the task contains at least one structural feature that triggers the target subtype (e.g., ≥2 mutually exclusive branches for Branch Collapse), verified by parsing the claims field; (3) Self-containedness — the task instruction does not reference external assumptions beyond the provided tool set; (4) Non-triviality — the correct answer cannot be reached by enumerating tool outputs without honouring the dependency graph in claims; (5) Label consistency — a separate GPT-4o instance ran each candidate task 5 times and the dominant failure mode was required to match hallucination_type. Tasks failing any criterion were regenerated with an augmented prompt naming the violated criterion. Additionally, dynamic reference scripts for stateless tasks were executed against live MCP servers to verify ground-truth correctness, with write operations rolled back via compensating transactions.",
       "activityType": "Preprocessing"
     },
     {
@@ -66,11 +70,11 @@
       "activityType": "Annotation"
     }
   ],
-  "rai:annotationsPerItem": 3,
+  "rai:annotationsPerItem": "3",
   "rai:annotatorDemographics": "Three annotators with backgrounds in LLM agent evaluation (each with 2+ years experience).",
   "distribution": [
     {
-      "@type": "cr:FileObject",
+      "@type": "sc:FileObject",
       "@id": "mcphallu_tasks_json",
       "name": "mcphallu_tasks.json",
       "description": "All 358 MCPHallu tasks in a single JSON array.",
@@ -79,7 +83,7 @@
       "sha256": "5c5c65c229b908c3230f17734d9a7c9e977fc29671d7ac96f2042844c1feda02"
     },
     {
-      "@type": "cr:FileObject",
+      "@type": "sc:FileObject",
       "@id": "confusion_tasks_jsonl",
       "name": "confusion_tasks.jsonl",
       "description": "84 Tool Misuse tasks in JSONL format.",
@@ -88,7 +92,7 @@
       "sha256": "35cae5bf7e649dab18dc1dd289f534211d1bc83eee4cd23b60ba88aa062ceb69"
     },
     {
-      "@type": "cr:FileObject",
+      "@type": "sc:FileObject",
       "@id": "memory_tasks_jsonl",
       "name": "memory_tasks.jsonl",
       "description": "82 Context Forgetting tasks in JSONL format.",
@@ -97,7 +101,7 @@
       "sha256": "bf4832b0f73bba9a2f0193efec488566a127dea9069b3caaf7544d5b66836634"
     },
     {
-      "@type": "cr:FileObject",
+      "@type": "sc:FileObject",
       "@id": "reasoning_tasks_jsonl",
       "name": "reasoning_tasks.jsonl",
       "description": "89 Branch Collapse tasks in JSONL format.",
@@ -106,7 +110,7 @@
       "sha256": "3c0b7cf7bd0f431ae5fa41e95a47805ef66dc7a727a70ebee090a20344b40a1e"
     },
     {
-      "@type": "cr:FileObject",
+      "@type": "sc:FileObject",
       "@id": "void_tasks_jsonl",
       "name": "void_tasks.jsonl",
       "description": "103 Unreachable Goal tasks in JSONL format.",
@@ -146,7 +150,7 @@
           "@type": "cr:Field",
           "@id": "tasks/bucket",
           "name": "bucket",
-          "description": "Capability domain: GENERAL, ANALYTICS, PRODUCTIVITY, FINANCIAL, or CODING. (Legacy label BASIC corresponds to GENERAL.)",
+          "description": "Capability domain: GENERAL, ANALYTICS, PRODUCTIVITY, FINANCIAL, or CODING.",
           "dataType": "sc:Text",
           "source": {
             "fileObject": {
@@ -161,7 +165,7 @@
           "@type": "cr:Field",
           "@id": "tasks/hallucination_type",
           "name": "hallucination_type",
-          "description": "Target subtype: Branch Collapse, Unreachable Goal, Tool Misuse, or Context Forgetting.",
+          "description": "Target hallucination subtype stored as the internal label: 'Reasoning Trap' (paper name: Branch Collapse), 'Void Trap' (paper name: Unreachable Goal), 'Confusion Trap' (paper name: Tool Misuse), or 'Memory Trap' (paper name: Context Forgetting).",
           "dataType": "sc:Text",
           "source": {
             "fileObject": {
@@ -261,6 +265,81 @@
               "jsonPath": "$[*].should_stop_early"
             }
           }
+        }
+      ]
+    }
+  ],
+  "rai:hasSyntheticData": true,
+  "prov:wasDerivedFrom": [
+    {
+      "@id": "https://github.com/scaleapi/mcp-atlas",
+      "prov:label": "mcp-atlas",
+      "sc:license": "MIT License",
+      "prov:wasAttributedTo": {
+        "prov:label": "Scale AI"
+      }
+    }
+  ],
+  "prov:wasGeneratedBy": [
+    {
+      "@type": "prov:Activity",
+      "prov:type": {
+        "@id": "https://www.wikidata.org/wiki/Q4929239"
+      },
+      "prov:label": "MCP Tool Schema Collection",
+      "sc:description": "Tool names, parameter definitions, and descriptions were collected programmatically from 36 live MCP servers across five capability domains (General, Analytics, Productivity, Financial, Coding) using the MCP list-tools API. No human annotators were involved in this stage."
+    },
+    {
+      "@type": "prov:Activity",
+      "prov:type": {
+        "@id": "https://www.wikidata.org/wiki/Q109719325"
+      },
+      "prov:label": "Adversarial Task Synthesis",
+      "sc:description": "Benchmark tasks were synthetically generated by prompting Claude Sonnet (Anthropic, version 4.6) with four subtype-specific adversarial prompt templates targeting Branch Collapse, Unreachable Goal, Tool Misuse, and Context Forgetting. Raw LLM outputs were parsed into structured JSON task objects.",
+      "prov:wasAttributedTo": [
+        {
+          "@type": "prov:Agent",
+          "@id": "claude_sonnet_4.6",
+          "prov:label": "Claude Sonnet 4.6",
+          "sc:description": "Anthropic Claude Sonnet 4.6, used as the primary synthetic generator. Prompted with four subtype-specific adversarial templates to produce structured JSON task objects."
+        }
+      ]
+    },
+    {
+      "@type": "prov:Activity",
+      "prov:type": {
+        "@id": "https://www.wikidata.org/wiki/Q5227332"
+      },
+      "prov:label": "Automated Filtering",
+      "sc:description": "Generated tasks were automatically filtered on five criteria: (1) Executability — every tool listed in required_tools exists in the catalog and accepts the referenced parameter schema; (2) Hallucination coverage — the task contains at least one structural feature that triggers the target subtype, verified by parsing the claims field; (3) Self-containedness — the task instruction does not reference external assumptions beyond the provided tool set; (4) Non-triviality — the correct answer cannot be reached by enumerating tool outputs without honouring the dependency graph in claims; (5) Label consistency — a separate GPT-4o instance ran each candidate task 5 times and the dominant failure mode was required to match hallucination_type. Tasks failing any criterion were regenerated with an augmented prompt. Additionally, dynamic reference scripts for stateless tasks were executed against live MCP servers to verify ground-truth correctness, with write operations rolled back via compensating transactions.",
+      "prov:wasAttributedTo": [
+        {
+          "@type": "prov:SoftwareAgent",
+          "@id": "softwareagent",
+          "prov:label": "SoftwareAgent",
+          "sc:description": "Custom Python scripts implementing five automated filtering criteria and ground-truth reference-script execution with write-operation rollback (generate_tasks_from_prompt.py and run_gt_execution.py)."
+        },
+        {
+          "@type": "prov:Agent",
+          "@id": "gpt_4o",
+          "prov:label": "GPT-4o",
+          "sc:description": "OpenAI GPT-4o used as an independent solver agent for the Label Consistency criterion (criterion 5). Each candidate task was run 5 times by GPT-4o; tasks whose dominant failure mode did not match the annotated hallucination_type were rejected and regenerated."
+        }
+      ]
+    },
+    {
+      "@type": "prov:Activity",
+      "prov:type": {
+        "@id": "https://www.wikidata.org/wiki/Q3306762"
+      },
+      "prov:label": "Expert Review",
+      "sc:description": "Three expert annotators with 2+ years of LLM agent evaluation experience performed quality review. Each task was independently reviewed for ground truth correctness, instruction clarity, and alignment with the target hallucination subtype. Disagreements were resolved by majority vote. Annotators were proficient in English and had backgrounds in NLP and AI agent research.",
+      "prov:wasAttributedTo": [
+        {
+          "@type": "prov:Agent",
+          "@id": "expert_annotators",
+          "prov:label": "Expert Annotators",
+          "sc:description": "Three expert reviewers with 2+ years of LLM agent evaluation experience. English-proficient, backgrounds in NLP and AI agent research. Majority vote for disagreement resolution."
         }
       ]
     }
