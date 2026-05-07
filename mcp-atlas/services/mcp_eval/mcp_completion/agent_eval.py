@@ -24,6 +24,25 @@ from .config import config
 
 logger = logging.getLogger(__name__)
 
+# Maximum characters per single tool response text (~5k tokens), to prevent oversized responses from blowing up the context
+_MAX_TOOL_RESPONSE_CHARS = 20_000
+
+
+def _truncate_tool_content(content: List[Content]) -> List[Content]:
+    """Truncate oversized TextContent to avoid a single tool response filling the context window."""
+    result = []
+    for item in content:
+        if isinstance(item, TextContent) and len(item.text) > _MAX_TOOL_RESPONSE_CHARS:
+            omitted = len(item.text) - _MAX_TOOL_RESPONSE_CHARS
+            truncated_text = (
+                item.text[:_MAX_TOOL_RESPONSE_CHARS]
+                + f"\n...[response truncated: {omitted} chars omitted]"
+            )
+            result.append(TextContent(type="text", text=truncated_text))
+        else:
+            result.append(item)
+    return result
+
 
 class AgentOutput:
     """MCP eval output wrapper."""
@@ -52,7 +71,6 @@ async def run_mcp_eval(
         original_content = None
 
         try:
-            # Use unified LiteLLM completion for all models
             result = await create_completion(
                 model=model,
                 messages=all_messages,
@@ -85,10 +103,10 @@ async def run_mcp_eval(
                         args,
                     )
 
-                    # Create tool call message
+                    # Create tool call message (truncate to avoid context overflow)
                     tool_call_message = ToolCallOutputMessage(
                         role="tool",
-                        content=response.content,
+                        content=_truncate_tool_content(response.content),
                         tool_call_id=tool_call.id,
                     )
 

@@ -1,0 +1,19 @@
+TrialID,DrugName,Phase,TherapeuticArea,Status,Sponsor,NCTNumber,StartDate,EndDate,Country
+ONC-001,Pembrolizumab-X,Phase 1,Oncology,Recruiting,Merck KGaA,NCT05001001,2024-01-15,2025-06-30,USA
+ONC-002,Nivolumab-ADC,Phase 1,Oncology,Recruiting,Bristol-Myers Squibb,NCT05001002,2024-02-01,2025-08-31,USA
+ONC-003,BRD4-inh-101,Phase 1,Oncology,Not Yet Recruiting,Novartis,NCT05001003,2024-04-01,2025-12-31,Germany
+ONC-004,CAR-T-CD19v2,Phase 2,Oncology,Recruiting,Kite Pharma,NCT06033287,2023-01-01,2025-09-01,USA
+ONC-005,Olaparib-combo,Phase 2,Oncology,Active Not Recruiting,AstraZeneca,NCT05002002,2023-06-15,2025-06-15,UK
+ONC-006,Durvalumab-LX,Phase 2,Oncology,Recruiting,AstraZeneca,NCT05592938,2024-01-10,2026-01-10,France
+ONC-007,Atezolizumab-B,Phase 2,Oncology,Active Not Recruiting,Roche,NCT05002004,2023-11-01,2025-11-01,Switzerland
+ONC-008,Bevacizumab-XT,Phase 3,Oncology,Completed,Genentech,NCT05003001,2021-03-01,2024-03-01,USA
+ONC-009,Cetuximab-Pro,Phase 3,Oncology,Completed,Eli Lilly,NCT05003002,2020-07-01,2023-07-01,USA
+ONC-010,Trastuzumab-DC,Phase 3,Oncology,Completed,Roche,NCT05003003,2021-01-15,2024-01-15,Japan
+ONC-011,Ramucirumab-2,Phase 3,Oncology,Completed,Eli Lilly,NCT05003004,2022-02-01,2024-12-31,Germany
+ONC-012,PARP-combo-22,Phase 4,Oncology,Recruiting,Pfizer,NCT05004001,2024-03-01,2026-03-01,USA
+ONC-013,Investigational-99,,Oncology,Suspended,Unknown Biotech,NCT05009001,2023-05-01,2024-05-01,Canada
+ONC-014,KRAS-G12C-inh,Phase 1,Oncology,Recruiting,Amgen,NCT05001004,2024-05-01,2026-05-01,USA
+ONC-015,HER2-ADC-301,Phase 2,Oncology,Recruiting,Daiichi Sankyo,NCT04722978,2024-03-15,2026-03-15,Japan
+ONC-016,EGFR-bispec-7,Phase 3,Oncology,Completed,AstraZeneca,NCT05003005,2021-06-01,2024-06-01,UK
+ONC-017,MEK-ERK-inh,Phase 1,Oncology,Not Yet Recruiting,Novartis,NCT05001005,2024-06-01,2025-12-31,Switzerland
+ONC-018,CD38-mAb-v3,Phase 2,Oncology,Active Not Recruiting,Johnson & Johnson,NCT05002006,2023-08-01,2025-08-01,USA

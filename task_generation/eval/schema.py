@@ -1,4 +1,4 @@
-"""数据结构：HallucinationType、Task、STATEFUL_BUCKETS。"""
+"""Data structures: HallucinationType, Task, STATEFUL_BUCKETS."""
 
 from dataclasses import dataclass
 from enum import Enum

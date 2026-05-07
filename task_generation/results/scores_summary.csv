@@ -1,0 +1,183 @@
+model,split,split_value,count,mean_score
+aws.claude-haiku-4-5-20251001,overall,all,358,0.7102
+aws.claude-haiku-4-5-20251001,difficulty,Easy,129,0.7857
+aws.claude-haiku-4-5-20251001,difficulty,Hard,109,0.6863
+aws.claude-haiku-4-5-20251001,difficulty,Medium,120,0.6507
+aws.claude-haiku-4-5-20251001,bucket,ANALYTICS,69,0.7586
+aws.claude-haiku-4-5-20251001,bucket,BASIC,75,0.8295
+aws.claude-haiku-4-5-20251001,bucket,CODING,80,0.6103
+aws.claude-haiku-4-5-20251001,bucket,FINANCIAL,73,0.826
+aws.claude-haiku-4-5-20251001,bucket,PRODUCTIVITY,61,0.501
+aws.claude-haiku-4-5-20251001,hallucination_type,Confusion Trap,84,0.8805
+aws.claude-haiku-4-5-20251001,hallucination_type,Memory Trap,82,0.6549
+aws.claude-haiku-4-5-20251001,hallucination_type,Reasoning Trap,89,0.7656
+aws.claude-haiku-4-5-20251001,hallucination_type,Void Trap,103,0.5673
+aws.claude-opus-4-5-20251101,overall,all,358,0.7283
+aws.claude-opus-4-5-20251101,difficulty,Easy,129,0.7836
+aws.claude-opus-4-5-20251101,difficulty,Hard,109,0.6867
+aws.claude-opus-4-5-20251101,difficulty,Medium,120,0.7066
+aws.claude-opus-4-5-20251101,bucket,ANALYTICS,69,0.7736
+aws.claude-opus-4-5-20251101,bucket,BASIC,75,0.7898
+aws.claude-opus-4-5-20251101,bucket,CODING,80,0.6657
+aws.claude-opus-4-5-20251101,bucket,FINANCIAL,73,0.8471
+aws.claude-opus-4-5-20251101,bucket,PRODUCTIVITY,61,0.5415
+aws.claude-opus-4-5-20251101,hallucination_type,Confusion Trap,84,0.885
+aws.claude-opus-4-5-20251101,hallucination_type,Memory Trap,82,0.7296
+aws.claude-opus-4-5-20251101,hallucination_type,Reasoning Trap,89,0.7553
+aws.claude-opus-4-5-20251101,hallucination_type,Void Trap,103,0.5761
+aws.claude-opus-4.6,overall,all,358,0.6963
+aws.claude-opus-4.6,difficulty,Easy,129,0.8076
+aws.claude-opus-4.6,difficulty,Hard,109,0.5848
+aws.claude-opus-4.6,difficulty,Medium,120,0.6779
+aws.claude-opus-4.6,bucket,ANALYTICS,69,0.7648
+aws.claude-opus-4.6,bucket,BASIC,75,0.6041
+aws.claude-opus-4.6,bucket,CODING,80,0.6341
+aws.claude-opus-4.6,bucket,FINANCIAL,73,0.8581
+aws.claude-opus-4.6,bucket,PRODUCTIVITY,61,0.6201
+aws.claude-opus-4.6,hallucination_type,Confusion Trap,84,0.8487
+aws.claude-opus-4.6,hallucination_type,Memory Trap,82,0.6119
+aws.claude-opus-4.6,hallucination_type,Reasoning Trap,89,0.8668
+aws.claude-opus-4.6,hallucination_type,Void Trap,103,0.492
+aws.claude-sonnet-4-5-20250929,overall,all,358,0.7017
+aws.claude-sonnet-4-5-20250929,difficulty,Easy,129,0.7701
+aws.claude-sonnet-4-5-20250929,difficulty,Hard,109,0.6403
+aws.claude-sonnet-4-5-20250929,difficulty,Medium,120,0.6839
+aws.claude-sonnet-4-5-20250929,bucket,ANALYTICS,69,0.7782
+aws.claude-sonnet-4-5-20250929,bucket,BASIC,75,0.7608
+aws.claude-sonnet-4-5-20250929,bucket,CODING,80,0.6702
+aws.claude-sonnet-4-5-20250929,bucket,FINANCIAL,73,0.827
+aws.claude-sonnet-4-5-20250929,bucket,PRODUCTIVITY,61,0.4337
+aws.claude-sonnet-4-5-20250929,hallucination_type,Confusion Trap,84,0.8749
+aws.claude-sonnet-4-5-20250929,hallucination_type,Memory Trap,82,0.6574
+aws.claude-sonnet-4-5-20250929,hallucination_type,Reasoning Trap,89,0.7145
+aws.claude-sonnet-4-5-20250929,hallucination_type,Void Trap,103,0.5846
+aws.claude-sonnet-4.6,overall,all,358,0.639
+aws.claude-sonnet-4.6,difficulty,Easy,129,0.7631
+aws.claude-sonnet-4.6,difficulty,Hard,109,0.5244
+aws.claude-sonnet-4.6,difficulty,Medium,120,0.6096
+aws.claude-sonnet-4.6,bucket,ANALYTICS,69,0.6575
+aws.claude-sonnet-4.6,bucket,BASIC,75,0.5959
+aws.claude-sonnet-4.6,bucket,CODING,80,0.5924
+aws.claude-sonnet-4.6,bucket,FINANCIAL,73,0.7902
+aws.claude-sonnet-4.6,bucket,PRODUCTIVITY,61,0.5509
+aws.claude-sonnet-4.6,hallucination_type,Confusion Trap,84,0.8396
+aws.claude-sonnet-4.6,hallucination_type,Memory Trap,82,0.5747
+aws.claude-sonnet-4.6,hallucination_type,Reasoning Trap,89,0.8184
+aws.claude-sonnet-4.6,hallucination_type,Void Trap,103,0.3714
+deepseek-v3-1-250821-inner,overall,all,358,0.6547
+deepseek-v3-1-250821-inner,difficulty,Easy,129,0.7602
+deepseek-v3-1-250821-inner,difficulty,Hard,109,0.5528
+deepseek-v3-1-250821-inner,difficulty,Medium,120,0.6338
+deepseek-v3-1-250821-inner,bucket,ANALYTICS,69,0.6597
+deepseek-v3-1-250821-inner,bucket,BASIC,75,0.7074
+deepseek-v3-1-250821-inner,bucket,CODING,80,0.5076
+deepseek-v3-1-250821-inner,bucket,FINANCIAL,73,0.7754
+deepseek-v3-1-250821-inner,bucket,PRODUCTIVITY,61,0.6326
+deepseek-v3-1-250821-inner,hallucination_type,Confusion Trap,84,0.8017
+deepseek-v3-1-250821-inner,hallucination_type,Memory Trap,82,0.7072
+deepseek-v3-1-250821-inner,hallucination_type,Reasoning Trap,89,0.7735
+deepseek-v3-1-250821-inner,hallucination_type,Void Trap,103,0.3903
+deepseek-v4,overall,all,358,0.6058
+deepseek-v4,difficulty,Easy,129,0.7029
+deepseek-v4,difficulty,Hard,109,0.4997
+deepseek-v4,difficulty,Medium,120,0.5977
+deepseek-v4,bucket,ANALYTICS,69,0.6942
+deepseek-v4,bucket,BASIC,75,0.5672
+deepseek-v4,bucket,CODING,80,0.5046
+deepseek-v4,bucket,FINANCIAL,73,0.7764
+deepseek-v4,bucket,PRODUCTIVITY,61,0.4817
+deepseek-v4,hallucination_type,Confusion Trap,84,0.7878
+deepseek-v4,hallucination_type,Memory Trap,82,0.5335
+deepseek-v4,hallucination_type,Reasoning Trap,89,0.8527
+deepseek-v4,hallucination_type,Void Trap,103,0.3015
+doubao-seed-1-8-251228-completion,overall,all,358,0.6918
+doubao-seed-1-8-251228-completion,difficulty,Easy,129,0.785
+doubao-seed-1-8-251228-completion,difficulty,Hard,109,0.6027
+doubao-seed-1-8-251228-completion,difficulty,Medium,120,0.6725
+doubao-seed-1-8-251228-completion,bucket,ANALYTICS,69,0.7125
+doubao-seed-1-8-251228-completion,bucket,BASIC,75,0.7389
+doubao-seed-1-8-251228-completion,bucket,CODING,80,0.5728
+doubao-seed-1-8-251228-completion,bucket,FINANCIAL,73,0.8084
+doubao-seed-1-8-251228-completion,bucket,PRODUCTIVITY,61,0.6268
+doubao-seed-1-8-251228-completion,hallucination_type,Confusion Trap,84,0.8597
+doubao-seed-1-8-251228-completion,hallucination_type,Memory Trap,82,0.6353
+doubao-seed-1-8-251228-completion,hallucination_type,Reasoning Trap,89,0.7526
+doubao-seed-1-8-251228-completion,hallucination_type,Void Trap,103,0.5472
+glm-5.1,overall,all,358,0.5394
+glm-5.1,difficulty,Easy,129,0.6708
+glm-5.1,difficulty,Hard,109,0.4478
+glm-5.1,difficulty,Medium,120,0.4813
+glm-5.1,bucket,ANALYTICS,69,0.6662
+glm-5.1,bucket,BASIC,75,0.5999
+glm-5.1,bucket,CODING,80,0.5465
+glm-5.1,bucket,FINANCIAL,73,0.3276
+glm-5.1,bucket,PRODUCTIVITY,61,0.5658
+glm-5.1,hallucination_type,Confusion Trap,84,0.6884
+glm-5.1,hallucination_type,Memory Trap,82,0.4567
+glm-5.1,hallucination_type,Reasoning Trap,89,0.6208
+glm-5.1,hallucination_type,Void Trap,103,0.4134
+gpt-4o-2024-08-06,overall,all,360,0.5972
+gpt-4o-2024-08-06,difficulty,Easy,129,0.6743
+gpt-4o-2024-08-06,difficulty,Hard,110,0.5155
+gpt-4o-2024-08-06,difficulty,Medium,121,0.5891
+gpt-4o-2024-08-06,bucket,ANALYTICS,69,0.6178
+gpt-4o-2024-08-06,bucket,BASIC,75,0.6838
+gpt-4o-2024-08-06,bucket,CODING,80,0.5629
+gpt-4o-2024-08-06,bucket,FINANCIAL,74,0.7235
+gpt-4o-2024-08-06,bucket,PRODUCTIVITY,62,0.363
+gpt-4o-2024-08-06,hallucination_type,Confusion Trap,84,0.8352
+gpt-4o-2024-08-06,hallucination_type,Memory Trap,82,0.5554
+gpt-4o-2024-08-06,hallucination_type,Reasoning Trap,89,0.6407
+gpt-4o-2024-08-06,hallucination_type,Void Trap,105,0.4024
+gpt-5-chat-2025-08-07,overall,all,358,0.6589
+gpt-5-chat-2025-08-07,difficulty,Easy,129,0.7176
+gpt-5-chat-2025-08-07,difficulty,Hard,109,0.5938
+gpt-5-chat-2025-08-07,difficulty,Medium,120,0.6549
+gpt-5-chat-2025-08-07,bucket,ANALYTICS,69,0.6204
+gpt-5-chat-2025-08-07,bucket,BASIC,75,0.7011
+gpt-5-chat-2025-08-07,bucket,CODING,80,0.5828
+gpt-5-chat-2025-08-07,bucket,FINANCIAL,73,0.7585
+gpt-5-chat-2025-08-07,bucket,PRODUCTIVITY,61,0.6311
+gpt-5-chat-2025-08-07,hallucination_type,Confusion Trap,84,0.8639
+gpt-5-chat-2025-08-07,hallucination_type,Memory Trap,82,0.5919
+gpt-5-chat-2025-08-07,hallucination_type,Reasoning Trap,89,0.7828
+gpt-5-chat-2025-08-07,hallucination_type,Void Trap,103,0.438
+kimi-k2.6,overall,all,358,0.5954
+kimi-k2.6,difficulty,Easy,129,0.6865
+kimi-k2.6,difficulty,Hard,109,0.5139
+kimi-k2.6,difficulty,Medium,120,0.5714
+kimi-k2.6,bucket,ANALYTICS,69,0.7178
+kimi-k2.6,bucket,BASIC,75,0.6573
+kimi-k2.6,bucket,CODING,80,0.4012
+kimi-k2.6,bucket,FINANCIAL,73,0.8224
+kimi-k2.6,bucket,PRODUCTIVITY,61,0.3639
+kimi-k2.6,hallucination_type,Confusion Trap,84,0.8291
+kimi-k2.6,hallucination_type,Memory Trap,82,0.4535
+kimi-k2.6,hallucination_type,Reasoning Trap,89,0.618
+kimi-k2.6,hallucination_type,Void Trap,103,0.4982
+qwen3.5-397b-a17b,overall,all,358,0.589
+qwen3.5-397b-a17b,difficulty,Easy,129,0.7241
+qwen3.5-397b-a17b,difficulty,Hard,109,0.4955
+qwen3.5-397b-a17b,difficulty,Medium,120,0.5288
+qwen3.5-397b-a17b,bucket,ANALYTICS,69,0.6715
+qwen3.5-397b-a17b,bucket,BASIC,75,0.6686
+qwen3.5-397b-a17b,bucket,CODING,80,0.5916
+qwen3.5-397b-a17b,bucket,FINANCIAL,73,0.4195
+qwen3.5-397b-a17b,bucket,PRODUCTIVITY,61,0.5974
+qwen3.5-397b-a17b,hallucination_type,Confusion Trap,84,0.7202
+qwen3.5-397b-a17b,hallucination_type,Memory Trap,82,0.4448
+qwen3.5-397b-a17b,hallucination_type,Reasoning Trap,89,0.6557
+qwen3.5-397b-a17b,hallucination_type,Void Trap,103,0.5393
+vertex_ai.gemini-3-flash-preview,overall,all,358,0.5833
+vertex_ai.gemini-3-flash-preview,difficulty,Easy,129,0.648
+vertex_ai.gemini-3-flash-preview,difficulty,Hard,109,0.5247
+vertex_ai.gemini-3-flash-preview,difficulty,Medium,120,0.567
+vertex_ai.gemini-3-flash-preview,bucket,ANALYTICS,69,0.5701
+vertex_ai.gemini-3-flash-preview,bucket,BASIC,75,0.6438
+vertex_ai.gemini-3-flash-preview,bucket,CODING,80,0.4714
+vertex_ai.gemini-3-flash-preview,bucket,FINANCIAL,73,0.7982
+vertex_ai.gemini-3-flash-preview,bucket,PRODUCTIVITY,61,0.4135
+vertex_ai.gemini-3-flash-preview,hallucination_type,Confusion Trap,84,0.793
+vertex_ai.gemini-3-flash-preview,hallucination_type,Memory Trap,82,0.6427
+vertex_ai.gemini-3-flash-preview,hallucination_type,Reasoning Trap,89,0.6771
+vertex_ai.gemini-3-flash-preview,hallucination_type,Void Trap,103,0.2839

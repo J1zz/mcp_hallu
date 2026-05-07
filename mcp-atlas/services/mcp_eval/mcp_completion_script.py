@@ -314,7 +314,7 @@ class AsyncMCPTrajectoryGenerator:
         task_id = row_data.get("TASK", task_index)
         prompt = row_data.get("PROMPT", "")
         num_attempts = 0
-        # start_time 放在 try 块外，确保 except 块里 end_time - start_time 不会 NameError
+        # start_time is placed outside the try block to prevent NameError when computing end_time - start_time in except
         start_time = time.time()
 
         try:
@@ -404,7 +404,7 @@ class AsyncMCPTrajectoryGenerator:
                 # Ground truth columns (from input dataset) - all CAPS
                 "TASK": task_id,
                 "PROMPT": prompt,
-                "TRAJECTORY": row_data.get("TRAJECTORY", ""),
+                "GT_EXECUTION_LOG": row_data.get("GT_EXECUTION_LOG", ""),
                 "GTFA_CLAIMS": row_data.get("GTFA_CLAIMS", ""),
                 "ENABLED_TOOLS": row_data.get("ENABLED_TOOLS", ""),
                 # Hallucination eval columns - pass through from input (may be absent in non-hallu datasets)
@@ -414,7 +414,7 @@ class AsyncMCPTrajectoryGenerator:
                 "SHOULD_STOP_EARLY": row_data.get("SHOULD_STOP_EARLY", ""),
                 "EVALUATION_RULES": row_data.get("EVALUATION_RULES", ""),
                 "STATE_ASSERTIONS": row_data.get("STATE_ASSERTIONS", ""),
-                # GT_STRATEGY 必须透传：评分路由器依赖此字段区分 state_check vs dynamic_script
+                # GT_STRATEGY must be passed through: scoring router relies on this field to distinguish state_check vs dynamic_script
                 "GT_STRATEGY": row_data.get("GT_STRATEGY", ""),
                 # Completion result columns (from script execution) - all lowercase
                 "script_model_response": result.script_model_response,
@@ -455,7 +455,7 @@ class AsyncMCPTrajectoryGenerator:
                 # Ground truth columns (from input dataset) - all CAPS
                 "TASK": task_id,
                 "PROMPT": prompt,
-                "TRAJECTORY": row_data.get("TRAJECTORY", ""),
+                "GT_EXECUTION_LOG": row_data.get("GT_EXECUTION_LOG", ""),
                 "GTFA_CLAIMS": row_data.get("GTFA_CLAIMS", ""),
                 "ENABLED_TOOLS": row_data.get("ENABLED_TOOLS", ""),
                 # Hallucination eval columns - pass through from input
@@ -465,7 +465,7 @@ class AsyncMCPTrajectoryGenerator:
                 "SHOULD_STOP_EARLY": row_data.get("SHOULD_STOP_EARLY", ""),
                 "EVALUATION_RULES": row_data.get("EVALUATION_RULES", ""),
                 "STATE_ASSERTIONS": row_data.get("STATE_ASSERTIONS", ""),
-                # GT_STRATEGY 必须透传：评分路由器依赖此字段区分 state_check vs dynamic_script
+                # GT_STRATEGY must be passed through: scoring router relies on this field to distinguish state_check vs dynamic_script
                 "GT_STRATEGY": row_data.get("GT_STRATEGY", ""),
                 # Completion result columns (from script execution) - all lowercase
                 "script_model_response": f"ERROR: {str(e)}",
@@ -657,7 +657,7 @@ def get_enabled_servers() -> List[str]:
     - Old: {"enabled_servers": ["server1", "server2"], "count": 2}
     - New: {"servers": [["server1", "OK"], ["server2", "ERROR"]], "total": 2, ...}
     """
-    mcp_server_url = os.getenv("MCP_SERVER_URL", "http://localhost:1984")
+    mcp_server_url = os.getenv("MCP_SERVER_URL", "http://localhost:19841")
 
     try:
         response = requests.get(f"{mcp_server_url}/enabled-servers", timeout=10)

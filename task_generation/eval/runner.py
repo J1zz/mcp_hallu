@@ -1,25 +1,11 @@
-"""主评测流程：LLM Judge 客户端、评分循环、报告输出、完整 pipeline。
-
-新流程设计
-----------
-每条任务独立完成「Agent 执行 → GT 生成 → 打分 → 写出 JSON」四步，
-不再等到所有任务跑完才统一打分。
-
-GT 生成策略
------------
-- Confusion Trap / Void Trap：strategy="none" 或无 ground_truth，无需 GT，直接打分。
-- Memory / Reasoning Trap，strategy="state_check"：
-    state_assertions 在任务设计时已确定，同样直接打分（断言在 score_state_assertions 里 exec）。
-- Memory / Reasoning Trap，strategy="dynamic_script"：
-    Agent 跑完后用 eval 模型（EVAL_LLM_MODEL）作为 judge 的同一个模型——实际上
-    dynamic_script 不依赖 LLM，而是同步调用 MCP 工具生成执行日志（run_one_gt_script）；
-    该步骤在 agent 完成后、打分前自动执行。
-"""
+"""Evaluation runner: LLM judge client, per-task scoring loop, report, and full pipeline."""
 
 import importlib.util
 import json
 import logging
 import os
+import shutil
+import subprocess as _sp
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -30,45 +16,38 @@ from .config import EVALS_AVAILABLE, LLMClient, EvalCfg, MCP_ATLAS_EVAL_DIR, SCR
 from .data_io import build_tasks_from_completion_csv, load_tasks_from_jsonl, tasks_to_csv
 from .schema import Task, HallucinationType
 from .scoring import route_and_score
-from .trajectory import parse_model_response, parse_tool_calls_from_trajectory, _safe_str
+from .trajectory import parse_model_response, parse_tool_calls_from_trajectory, parse_full_trajectory, parse_full_trajectory_from_conversation, _safe_str
 
 logger = logging.getLogger(__name__)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Docker /data 快照工具（用于任务间状态隔离）
-# ──────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Docker /data snapshot helpers (inter-task state isolation)
+# ---------------------------------------------------------------------------
 
-import shutil
-import subprocess as _sp
-
-# 排除 mcp_code_executor_workspace（venv 缓存，255M，不影响任务状态）
+# Excluded from snapshots: large venv cache that does not affect task state.
 _SNAPSHOT_EXCLUDE = "/data/repos/mcp_code_executor_workspace"
 _SNAPSHOT_PATH_IN_CONTAINER = "/tmp/_hallu_eval_snapshot.tar.gz"
 
 
 def _docker_cmd() -> str:
-    """返回 docker 可执行文件路径（兼容 macOS Docker Desktop）。"""
-    candidates = [
-        "docker",
-        "/Volumes/Docker/Docker.app/Contents/Resources/bin/docker",
-        "/usr/local/bin/docker",
-        "/opt/homebrew/bin/docker",
-    ]
-    for c in candidates:
+    """Return the docker executable path, checking common macOS locations."""
+    for c in ("docker",
+              "/Volumes/Docker/Docker.app/Contents/Resources/bin/docker",
+              "/usr/local/bin/docker",
+              "/opt/homebrew/bin/docker"):
         if shutil.which(c):
             return c
     return "docker"
 
 
 def _get_container_name() -> Optional[str]:
-    """返回当前运行的 agent-environment 容器名（优先精确匹配 image 名）。"""
+    """Return the name of the running agent-environment container, or None."""
     docker = _docker_cmd()
     try:
         out = _sp.check_output(
             [docker, "ps", "--format", "{{.Names}}\t{{.Image}}"],
-            stderr=_sp.DEVNULL,
-            timeout=10,
+            stderr=_sp.DEVNULL, timeout=10,
         ).decode()
         for line in out.splitlines():
             parts = line.split("\t")
@@ -80,10 +59,10 @@ def _get_container_name() -> Optional[str]:
 
 
 def docker_snapshot_create(container: str) -> bool:
-    """在容器内对 /data 创建 tar 快照（排除大型 venv 缓存）。
+    """Create a tar snapshot of /data inside the container (~800 ms, ~23 MB).
 
-    快照保存在容器的 /tmp 中，耗时约 800ms（~23MB 压缩包）。
-    返回 True 表示成功。
+    The snapshot is stored at _SNAPSHOT_PATH_IN_CONTAINER inside the container.
+    Returns True on success.
     """
     docker = _docker_cmd()
     cmd = (
@@ -91,30 +70,28 @@ def docker_snapshot_create(container: str) -> bool:
         f"--exclude={_SNAPSHOT_EXCLUDE} /data 2>/dev/null && echo OK"
     )
     try:
-        t0 = _sp.check_output(
+        out = _sp.check_output(
             [docker, "exec", container, "sh", "-c", cmd],
-            stderr=_sp.PIPE,
-            timeout=60,
+            stderr=_sp.PIPE, timeout=60,
         ).decode().strip()
-        ok = (t0 == "OK")
+        ok = (out == "OK")
         if ok:
-            logger.info(f"[snapshot] /data 快照已创建 → {_SNAPSHOT_PATH_IN_CONTAINER}")
+            logger.info(f"[snapshot] /data snapshot created → {_SNAPSHOT_PATH_IN_CONTAINER}")
         else:
-            logger.warning(f"[snapshot] 快照创建疑似失败，输出: {t0!r}")
+            logger.warning(f"[snapshot] snapshot creation may have failed, output: {out!r}")
         return ok
     except Exception as e:
-        logger.warning(f"[snapshot] 创建快照失败: {e}")
+        logger.warning(f"[snapshot] snapshot creation failed: {e}")
         return False
 
 
 def docker_snapshot_restore(container: str) -> bool:
-    """将容器内 /tmp 中的 /data 快照恢复到 /data（覆盖写）。
+    """Restore /data from the snapshot inside the container (~250 ms).
 
-    恢复耗时约 250ms，彻底清除任务执行产生的所有副作用。
-    返回 True 表示成功。
+    Deletes existing /data contents before unpacking so stale files are removed.
+    Returns True on success.
     """
     docker = _docker_cmd()
-    # 先删掉现有 /data，再解包——确保删掉多余文件
     cmd = (
         f"test -f {_SNAPSHOT_PATH_IN_CONTAINER} && "
         f"find /data -mindepth 1 -not -path '{_SNAPSHOT_EXCLUDE}/*' -delete 2>/dev/null; "
@@ -123,28 +100,27 @@ def docker_snapshot_restore(container: str) -> bool:
     try:
         out = _sp.check_output(
             [docker, "exec", container, "sh", "-c", cmd],
-            stderr=_sp.PIPE,
-            timeout=60,
+            stderr=_sp.PIPE, timeout=60,
         ).decode().strip()
         ok = out.endswith("OK")
         if ok:
-            logger.info("[snapshot] /data 已从快照恢复")
+            logger.info("[snapshot] /data restored from snapshot")
         else:
-            logger.warning(f"[snapshot] 恢复快照疑似失败，输出: {out!r}")
+            logger.warning(f"[snapshot] restore may have failed, output: {out!r}")
         return ok
     except Exception as e:
-        logger.warning(f"[snapshot] 恢复快照失败: {e}")
+        logger.warning(f"[snapshot] restore failed: {e}")
         return False
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# LLM Judge 客户端构建
-# ──────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# LLM judge client
+# ---------------------------------------------------------------------------
 
 def build_llm_judge_client() -> Any:
-    """从 .env 配置创建 LLM Judge 客户端；不可用时返回 None。"""
+    """Build an LLM judge client from environment variables; returns None if unavailable."""
     if not EVALS_AVAILABLE:
-        logger.warning("mcp_evals_scores 不可用，LLM Judge 已禁用")
+        logger.warning("mcp_evals_scores not available — LLM judge disabled")
         return None
 
     model   = os.getenv("EVAL_LLM_MODEL", "").strip()
@@ -152,10 +128,10 @@ def build_llm_judge_client() -> Any:
     base    = os.getenv("EVAL_LLM_BASE_URL", "").strip() or os.getenv("LLM_BASE_URL", "").strip()
 
     if not model:
-        logger.warning("EVAL_LLM_MODEL 未配置，LLM Judge 已禁用")
+        logger.warning("EVAL_LLM_MODEL not set — LLM judge disabled")
         return None
     if not api_key:
-        logger.warning("EVAL_LLM_API_KEY 未配置，LLM Judge 已禁用")
+        logger.warning("EVAL_LLM_API_KEY not set — LLM judge disabled")
         return None
 
     os.environ["EVAL_LLM_API_KEY"] = api_key
@@ -164,32 +140,29 @@ def build_llm_judge_client() -> Any:
 
     try:
         client = LLMClient(EvalCfg(evaluator_model=model, semaphore_limit=1))
-        logger.info(f"LLM Judge 已启用: model={model}, base_url={base or '(default)'}")
+        logger.info(f"LLM judge enabled: model={model}, base_url={base or '(default)'}")
         return client
     except Exception as e:
-        logger.warning(f"LLM Judge 客户端创建失败: {e}")
+        logger.warning(f"LLM judge client creation failed: {e}")
         return None
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# GT 生成（inline，集成到 eval 流程）
-# ──────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Inline GT generation
+# ---------------------------------------------------------------------------
 
 def _run_gt_for_task(task: Task, task_raw: dict) -> str:
-    """对 dynamic_script 任务在 agent 跑完后内联执行 GT 脚本，返回 gt_execution_log。
+    """Execute the dynamic_reference_script for a task and return gt_execution_log.
 
-    仅对 strategy=="dynamic_script" 且含有 dynamic_reference_script 的任务执行；
-    其余情况返回空字符串（task 已经携带 gt_execution_log 则直接返回）。
+    No-ops if the task already has a gt_execution_log or uses a strategy other
+    than dynamic_script. Returns an empty string on failure.
     """
-    # 已经有 gt_execution_log（例如从带 GT 的 JSONL 加载进来的任务）
     if task.gt_execution_ok and task.gt_execution_log:
         return task.gt_execution_log
 
-    strategy = task.ground_truth.get("strategy", "")
-    if strategy != "dynamic_script":
+    if task.ground_truth.get("strategy") != "dynamic_script":
         return task.gt_execution_log or ""
 
-    # 调用 run_gt_execution 里的 run_one_gt_script
     try:
         import sys
         tg_dir = str(SCRIPT_DIR)
@@ -199,20 +172,19 @@ def _run_gt_for_task(task: Task, task_raw: dict) -> str:
         updated, ok = run_one_gt_script(task_raw, task_index=0, verbose=False, rollback=True)
         if ok:
             gt_log = updated.get("gt_execution_log") or ""
-            logger.info(f"  [GT] dynamic_script 执行成功 ({len(gt_log)} chars)")
+            logger.info(f"  [GT] dynamic_script executed successfully ({len(gt_log)} chars)")
             return gt_log
         else:
-            err = updated.get("gt_execution_error", "unknown")
-            logger.warning(f"  [GT] dynamic_script 执行失败: {err}")
+            logger.warning(f"  [GT] dynamic_script failed: {updated.get('gt_execution_error', 'unknown')}")
             return ""
     except Exception as e:
-        logger.warning(f"  [GT] GT 脚本执行异常: {e}")
+        logger.warning(f"  [GT] GT script exception: {e}")
         return ""
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 单任务评分（含 GT 生成）
-# ──────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Per-task scoring
+# ---------------------------------------------------------------------------
 
 def score_one_task(
     task: Task,
@@ -222,36 +194,45 @@ def score_one_task(
     pass_threshold: float,
     json_output_dir: Optional[Path],
 ) -> Dict[str, Any]:
-    """对单条任务执行「GT 生成 → 打分 → 写 JSON」三步，返回带评分字段的行字典。
+    """Run GT generation → scoring → JSON write for a single task.
 
-    Parameters
-    ----------
-    task          : Task 对象（从 completion CSV 重建，gt_execution_log 可能为空）
-    task_raw      : 原始任务 dict（含 ground_truth.dynamic_reference_script，供 GT 脚本使用）
-    row           : completion CSV 对应行（含 trajectory / script_model_response 等）
-    llm_client    : LLM Judge 客户端（可为 None）
-    pass_threshold: 通过分数线
-    json_output_dir: 每任务 JSON 结果写出目录（None 则不写）
+    Args:
+        task:            Task object (rebuilt from completion CSV; gt_execution_log may be empty).
+        task_raw:        Raw task dict from the original JSONL (needed for GT script execution).
+        row:             Completion CSV row dict (contains trajectory, script_model_response, etc.).
+        llm_client:      LLM judge client (may be None).
+        pass_threshold:  Score threshold for hallu_pass.
+        json_output_dir: Directory to write per-task JSON; skipped when None.
     """
     traj_raw   = row.get("trajectory") or row.get("raw_conversation_history") or ""
     tool_calls = parse_tool_calls_from_trajectory(str(traj_raw))
+    # Prefer raw_conversation_history (OpenAI format) as it carries actual tool responses;
+    # fall back to the simplified trajectory field when not available.
+    full_traj  = (
+        parse_full_trajectory_from_conversation(str(row.get("raw_conversation_history") or ""))
+        or parse_full_trajectory(str(row.get("trajectory") or ""))
+    )
     response   = parse_model_response(dict(row))
 
-    # ── GT 生成（仅 dynamic_script 需要且尚未执行）──────────────────────────
-    strategy = task.ground_truth.get("strategy", "")
-    if strategy == "dynamic_script" and not task.gt_execution_ok:
+    if task.ground_truth.get("strategy") == "dynamic_script" and not task.gt_execution_ok:
         gt_log = _run_gt_for_task(task, task_raw)
         if gt_log:
             task.gt_execution_log = gt_log
             task.gt_execution_ok  = True
 
-    # ── 打分 ────────────────────────────────────────────────────────────────
     try:
-        components = route_and_score(task, tool_calls, response, len(tool_calls), llm_client=llm_client)
-        score      = components.get("score", 0.0)
+        components    = route_and_score(
+            task, tool_calls, response, len(tool_calls),
+            llm_client=llm_client,
+            full_trajectory=full_traj or None,
+        )
+        score         = components.get("score", 0.0)
         strategy_used = components.get("strategy", "unknown")
+    except RuntimeError as e:
+        logger.error(f"  [config/data error] {e}", exc_info=True)
+        components, score, strategy_used = {"config_error": str(e), "score": 0.0}, 0.0, "config_error"
     except Exception as e:
-        logger.error(f"  评分出错: {e}")
+        logger.error(f"  [scoring error] {e}", exc_info=True)
         components, score, strategy_used = {"error": str(e), "score": 0.0}, 0.0, "error"
 
     out = dict(row)
@@ -266,23 +247,28 @@ def score_one_task(
         "gt_execution_log": task.gt_execution_log or "",
     })
 
-    # ── 写出单任务 JSON ──────────────────────────────────────────────────────
+    # Replace pandas NaN floats with None so the output is valid JSON.
+    import math as _math
+    out = {k: (None if isinstance(v, float) and _math.isnan(v) else v) for k, v in out.items()}
+    # GT_EXECUTION_LOG (uppercase) is a CSV pass-through duplicate; drop it.
+    out.pop("GT_EXECUTION_LOG", None)
+
     if json_output_dir is not None:
         json_output_dir.mkdir(parents=True, exist_ok=True)
-        safe_id = str(task.task_id).replace("/", "_").replace("\\", "_")
+        safe_id   = str(task.task_id).replace("/", "_").replace("\\", "_")
         json_path = json_output_dir / f"{safe_id}.json"
         try:
             with open(json_path, "w", encoding="utf-8") as fp:
                 json.dump(out, fp, ensure_ascii=False, indent=2)
         except Exception as e:
-            logger.warning(f"  写出 JSON 失败 ({json_path}): {e}")
+            logger.warning(f"  Failed to write JSON ({json_path}): {e}")
 
     return out
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 从 completion CSV 评分（支持「一任务一打分」模式）
-# ──────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Scoring from a completion CSV
+# ---------------------------------------------------------------------------
 
 def evaluate_from_completion_csv(
     completion_csv_path: str,
@@ -291,26 +277,25 @@ def evaluate_from_completion_csv(
     jsonl_path: Optional[str] = None,
     json_output_dir: Optional[str] = None,
 ) -> pd.DataFrame:
-    """从 completion CSV 逐任务评分，每条任务完成后立即写出 JSON 并追加到汇总 CSV。
+    """Score every row in a completion CSV, writing results as they complete.
 
-    Parameters
-    ----------
-    completion_csv_path : Agent 执行结果 CSV 路径
-    output_csv_path     : 最终汇总评分 CSV 输出路径
-    pass_threshold      : 通过分数线
-    jsonl_path          : 原始任务 JSONL 路径（用于为 dynamic_script 任务提供 GT 脚本原文）
-    json_output_dir     : 每任务 JSON 输出目录；None 则使用 output_csv 同目录下的 task_results/
+    Args:
+        completion_csv_path: Path to the agent completion CSV.
+        output_csv_path:     Path for the aggregated scoring CSV output.
+        pass_threshold:      Score threshold for hallu_pass.
+        jsonl_path:          Original task JSONL path; needed to run GT scripts for
+                             dynamic_script tasks when gt_execution_log is missing.
+        json_output_dir:     Directory for per-task JSON files; defaults to
+                             <output_csv_dir>/task_results/.
     """
     logger.info(f"Loading completion CSV: {completion_csv_path}")
     df    = pd.read_csv(completion_csv_path)
     tasks = build_tasks_from_completion_csv(df)
     llm   = build_llm_judge_client()
 
-    # 确定 JSON 输出目录
     out_csv_path = Path(output_csv_path)
-    json_dir = Path(json_output_dir) if json_output_dir else out_csv_path.parent / "task_results"
+    json_dir     = Path(json_output_dir) if json_output_dir else out_csv_path.parent / "task_results"
 
-    # 从原始 JSONL 建立 task_id → raw_task_dict 映射（用于 GT 脚本执行）
     raw_task_map: Dict[str, dict] = {}
     if jsonl_path:
         try:
@@ -325,11 +310,10 @@ def evaluate_from_completion_csv(
                         raw_task_map[tid] = obj
                     except json.JSONDecodeError:
                         pass
-            logger.info(f"从 JSONL 加载了 {len(raw_task_map)} 条原始任务（用于 GT 脚本）")
+            logger.info(f"Loaded {len(raw_task_map)} raw tasks from JSONL (for GT scripts)")
         except Exception as e:
-            logger.warning(f"无法加载原始 JSONL ({jsonl_path}): {e}")
+            logger.warning(f"Could not load JSONL ({jsonl_path}): {e}")
 
-    # 准备汇总输出文件（首条写入时创建 header）
     out_csv_path.parent.mkdir(parents=True, exist_ok=True)
     result_rows: List[Dict[str, Any]] = []
     header_written = False
@@ -339,13 +323,9 @@ def evaluate_from_completion_csv(
             f"[{i+1}/{len(tasks)}] {task.task_id}  "
             f"{task.hallucination_type}  {task.bucket}  {task.difficulty}"
         )
-
-        # 取对应的原始任务 dict（供 GT 脚本使用；找不到则用空 dict）
-        task_raw = raw_task_map.get(task.task_id, {})
-
         scored_row = score_one_task(
             task=task,
-            task_raw=task_raw,
+            task_raw=raw_task_map.get(task.task_id, {}),
             row=dict(row),
             llm_client=llm,
             pass_threshold=pass_threshold,
@@ -353,18 +333,13 @@ def evaluate_from_completion_csv(
         )
         result_rows.append(scored_row)
 
-        # 立即追加到汇总 CSV（逐行写，边跑边存）
         try:
-            row_df = pd.DataFrame([scored_row])
-            row_df.to_csv(
-                out_csv_path,
-                mode="a",
-                header=not header_written,
-                index=False,
+            pd.DataFrame([scored_row]).to_csv(
+                out_csv_path, mode="a", header=not header_written, index=False,
             )
             header_written = True
         except Exception as e:
-            logger.warning(f"  写入汇总 CSV 失败: {e}")
+            logger.warning(f"  Failed to write summary CSV: {e}")
 
         logger.info(
             f"  → score={scored_row.get('hallu_score', 'N/A'):.4f}  "
@@ -374,63 +349,61 @@ def evaluate_from_completion_csv(
 
     result_df = pd.DataFrame(result_rows)
     print_eval_report(result_df, pass_threshold)
-    logger.info(f"评测结果已保存至: {out_csv_path}")
-    logger.info(f"单任务 JSON 已写出至: {json_dir}/")
+    logger.info(f"Results saved to: {out_csv_path}")
+    logger.info(f"Per-task JSON written to: {json_dir}/")
     return result_df
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 评测报告
-# ──────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Evaluation report
+# ---------------------------------------------------------------------------
 
 def print_eval_report(df: pd.DataFrame, pass_threshold: float):
-    """打印评测统计报告。"""
+    """Print a summary evaluation report to stdout."""
     W = 70
     print("\n" + "=" * W)
-    print("  幻觉感知评测报告")
+    print("  MCPHallu Evaluation Report")
     print("=" * W)
 
     valid = df["hallu_score"].dropna()
     if valid.empty:
-        print("  无有效评分数据")
+        print("  No scored samples.")
         return
 
-    print(f"  样本数量    : {len(valid)}")
-    print(f"  平均得分    : {valid.mean():.3f}")
-    print(f"  通过率(≥{pass_threshold:.2f}): {(valid >= pass_threshold).mean():.1%}")
+    print(f"  Samples      : {len(valid)}")
+    print(f"  Mean score   : {valid.mean():.3f}")
+    print(f"  Pass rate (≥{pass_threshold:.2f}): {(valid >= pass_threshold).mean():.1%}")
 
     def _section(col: str, label: str):
         if col not in df.columns:
             return
-        print(f"\n  ── {label} ──────────────────────────────────────")
+        print(f"\n  {label}")
         for key, grp in df.groupby(col):
             s = grp["hallu_score"].dropna()
             if s.empty:
                 continue
             print(f"  {str(key):<28} n={len(s):3d}  avg={s.mean():.3f}  pass={(s >= pass_threshold).mean():.1%}")
 
-    _section("HALLUCINATION_TYPE", "幻觉类型")
-    _section("BUCKET", "Bucket")
+    _section("HALLUCINATION_TYPE", "By hallucination type")
+    _section("BUCKET", "By bucket")
     if "DIFFICULTY" in df.columns and df["DIFFICULTY"].nunique() > 1:
-        _section("DIFFICULTY", "难度")
+        _section("DIFFICULTY", "By difficulty")
 
     if "hallu_strategy" in df.columns:
-        print("\n  ── 评分策略分布 ─────────────────────────────────")
+        print("\n  Scoring strategy distribution")
         for strat, grp in df.groupby("hallu_strategy"):
             print(f"  {strat:<35} n={len(grp):3d}")
 
     if "gt_execution_ok" in df.columns:
         ok_n = df["gt_execution_ok"].sum()
-        total = len(df)
-        print(f"\n  ── GT 执行状态 ──────────────────────────────────")
-        print(f"  GT 执行成功: {ok_n}/{total}")
+        print(f"\n  GT execution OK: {ok_n}/{len(df)}")
 
     print("=" * W)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 完整 pipeline：JSONL → Agent 执行 → 逐任务打分 → 汇总 CSV + 单任务 JSON
-# ──────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Full pipeline: JSONL → agent execution → per-task scoring → CSV + JSON
+# ---------------------------------------------------------------------------
 
 async def run_full_pipeline(
     jsonl_path: str,
@@ -439,37 +412,38 @@ async def run_full_pipeline(
     server_url: str,
     concurrency: int = 3,
     num_tasks: Optional[int] = None,
+    task_indices: Optional[List[int]] = None,
     pass_threshold: float = 0.6,
     json_output_dir: Optional[str] = None,
     use_docker_snapshot: bool = False,
 ) -> pd.DataFrame:
-    """End-to-end pipeline: JSONL → Agent execution → per-task GT + scoring → CSV + JSON。
+    """End-to-end pipeline: JSONL → agent execution → per-task GT + scoring → CSV + JSON.
 
-    流程
-    ----
-    1. 加载 JSONL 任务，转为中间 CSV（供 mcp_completion_script 消费）
-    2. 调用 AsyncMCPTrajectoryGenerator 让待测模型逐并发跑轨迹
-       - 每条任务跑完后写入 completion CSV（mcp_completion_script 内部行为）
-    3. 待测模型全部跑完后，逐任务：
-       a. 若 strategy=="dynamic_script"，使用 run_one_gt_script 生成 GT 执行日志
-       b. 调用 route_and_score 打分（dynamic_script 任务使用刚生成的 GT 日志做语义对比）
-       c. 写出单任务 JSON 文件
-       d. 追加到汇总 CSV
+    Steps:
+      1. Load JSONL tasks and convert to an intermediate CSV for mcp_completion_script.
+      2. Run AsyncMCPTrajectoryGenerator to collect agent trajectories.
+      3. For each completed task:
+           a. Run run_one_gt_script if strategy == "dynamic_script" and GT is missing.
+           b. Call route_and_score.
+           c. Write per-task JSON and append to the summary CSV.
 
-    参数
-    ----
-    json_output_dir      : 单任务 JSON 输出目录；None 则放在 output_csv 同目录的 task_results/
-    use_docker_snapshot  : True 时在每条任务执行前恢复 /data 快照，实现任务间状态隔离；
-                           此模式下 concurrency 强制为 1（串行执行）。
+    Args:
+        json_output_dir:     Per-task JSON directory; defaults to <output_csv_dir>/task_results/.
+        use_docker_snapshot: When True, restore /data from a snapshot before each task to
+                             isolate stateful side-effects. Forces concurrency=1.
+        task_indices:        When set, run only the tasks at these 0-based row positions
+                             (applied before num_tasks).
     """
     tasks = load_tasks_from_jsonl(jsonl_path)
+    if task_indices is not None:
+        tasks = [tasks[i] for i in task_indices if i < len(tasks)]
     if num_tasks:
         tasks = tasks[:num_tasks]
 
     tmp_csv  = tempfile.mktemp(suffix=".csv")
     tasks_df = tasks_to_csv(tasks, tmp_csv)
 
-    # completion CSV 路径（绝对路径，避免 chdir 后相对路径错位）
+    # Use an absolute path so it survives os.chdir() below.
     completion_csv_path = (
         Path(output_csv)
         .with_name(Path(output_csv).stem + "_completion.csv")
@@ -479,31 +453,59 @@ async def run_full_pipeline(
 
     orig_cwd = os.getcwd()
 
-    # ── Docker 快照初始化 ────────────────────────────────────────────────────
+    # Snapshot mode setup
     _snapshot_container: Optional[str] = None
     if use_docker_snapshot:
-        concurrency = 1  # 快照模式必须串行
+        concurrency = 1  # snapshots require serial execution
         _snapshot_container = _get_container_name()
         if _snapshot_container:
             ok = docker_snapshot_create(_snapshot_container)
             if ok:
-                logger.info(
-                    f"[snapshot] 已对容器 {_snapshot_container!r} 的 /data 创建初始快照，"
-                    "每条任务执行前将自动恢复"
-                )
+                logger.info(f"[snapshot] Initial /data snapshot created for container {_snapshot_container!r}")
             else:
-                logger.warning("[snapshot] 初始快照创建失败，将不做状态隔离")
+                logger.warning("[snapshot] Initial snapshot failed — state isolation disabled")
                 _snapshot_container = None
         else:
-            logger.warning("[snapshot] 未找到运行中的 agent-environment 容器，快照模式已降级")
+            logger.warning("[snapshot] No running agent-environment container found — snapshot mode disabled")
 
-    # ── Step 1: Agent 执行（支持快照模式逐条串行） ────────────────────────────
+    # Resources shared by the inline (per-task) scoring path used in snapshot mode.
+    _inline_result_rows: List[Dict[str, Any]] = []
+    _inline_scored       = False
+    _inline_llm: Any     = None
+    _inline_raw_task_map: Dict[str, dict] = {}
+    _inline_out_csv      = Path(output_csv)
+    _inline_json_dir     = (
+        Path(json_output_dir) if json_output_dir
+        else _inline_out_csv.parent / "task_results"
+    )
+    _inline_header_written = False
+
+    if _snapshot_container:
+        _inline_llm = build_llm_judge_client()
+        if jsonl_path:
+            try:
+                with open(jsonl_path, encoding="utf-8") as _f:
+                    for _idx, _line in enumerate(_f):
+                        _line = _line.strip()
+                        if not _line:
+                            continue
+                        try:
+                            _obj = json.loads(_line)
+                            _tid = _obj.get("task_id") or f"{Path(jsonl_path).stem}_{_idx}"
+                            _inline_raw_task_map[_tid] = _obj
+                        except json.JSONDecodeError:
+                            pass
+                logger.info(f"Loaded {len(_inline_raw_task_map)} raw tasks from JSONL")
+            except Exception as _e:
+                logger.warning(f"Could not load JSONL ({jsonl_path}): {_e}")
+
+    # Agent execution
     try:
         os.chdir(MCP_ATLAS_EVAL_DIR)
         (MCP_ATLAS_EVAL_DIR / "completion_results").mkdir(exist_ok=True)
         completion_csv_path.unlink(missing_ok=True)
 
-        spec = importlib.util.spec_from_file_location(
+        spec    = importlib.util.spec_from_file_location(
             "mcp_completion_script",
             MCP_ATLAS_EVAL_DIR / "mcp_completion_script.py",
         )
@@ -512,55 +514,91 @@ async def run_full_pipeline(
         mcp_mod.SERVER_URL = server_url
 
         if _snapshot_container:
-            # ── 快照模式：逐条任务，执行前恢复 /data ──────────────────────
+            _rows_scored = 0
             async with mcp_mod.AsyncMCPTrajectoryGenerator(model) as gen:
                 for task_idx, (_, row) in enumerate(tasks_df.iterrows()):
                     task_id = row.get("TASK", f"task_{task_idx}")
-                    logger.info(
-                        f"[snapshot] 恢复 /data 初始状态（任务 {task_idx+1}/{len(tasks_df)}: {task_id}）"
-                    )
+                    logger.info(f"[snapshot] Restoring /data (task {task_idx+1}/{len(tasks_df)}: {task_id})")
                     docker_snapshot_restore(_snapshot_container)
-                    single_row_df = pd.DataFrame([row.to_dict()])
+
                     await gen.evaluate_dataset_async(
-                        single_row_df, str(completion_csv_path), None, 1
+                        pd.DataFrame([row.to_dict()]), str(completion_csv_path), None, 1
                     )
+
+                    try:
+                        os.chdir(orig_cwd)
+                        comp_df  = pd.read_csv(completion_csv_path)
+                        new_rows = comp_df.iloc[_rows_scored:]
+                        if not new_rows.empty:
+                            task_objs = build_tasks_from_completion_csv(new_rows)
+                            for t_obj, (_, comp_row) in zip(task_objs, new_rows.iterrows()):
+                                t_raw = _inline_raw_task_map.get(t_obj.task_id, {})
+                                logger.info(
+                                    f"[{task_idx+1}/{len(tasks_df)}] {t_obj.task_id}  "
+                                    f"{t_obj.hallucination_type}  {t_obj.bucket}  {t_obj.difficulty}"
+                                )
+                                scored = score_one_task(
+                                    t_obj, t_raw, dict(comp_row),
+                                    _inline_llm, pass_threshold, _inline_json_dir,
+                                )
+                                _inline_result_rows.append(scored)
+                                pd.DataFrame([scored]).to_csv(
+                                    _inline_out_csv, mode="a",
+                                    header=not _inline_header_written, index=False,
+                                )
+                                _inline_header_written = True
+                                logger.info(
+                                    f"  → score={scored.get('hallu_score', 'N/A'):.4f}  "
+                                    f"pass={scored.get('hallu_pass')}  "
+                                    f"strategy={scored.get('hallu_strategy')}"
+                                )
+                            _rows_scored += len(new_rows)
+                    except Exception as _se:
+                        logger.warning(f"  [inline scoring] Failed for task {task_idx+1}: {_se}")
+                    finally:
+                        os.chdir(MCP_ATLAS_EVAL_DIR)
+
+            _inline_scored = True
         else:
-            # ── 普通并发模式 ───────────────────────────────────────────────
             async with mcp_mod.AsyncMCPTrajectoryGenerator(model) as gen:
                 await gen.evaluate_dataset_async(
                     tasks_df, str(completion_csv_path), None, concurrency
                 )
 
     except Exception as e:
-        logger.error(f"Agent 执行失败: {e}，将以空轨迹评分")
+        logger.error(f"Agent execution failed: {e} — scoring with empty trajectories")
         empty = [
             {
                 **dict(r),
-                "script_model_response": "",
+                "script_model_response":    "",
                 "raw_conversation_history": "[]",
-                "trajectory": "[]",
-                "errors": "[]",
-                "trajectory_time": 0.0,
-                "num_retry": 0,
+                "trajectory":               "[]",
+                "errors":                   "[]",
+                "trajectory_time":          0.0,
+                "num_retry":                0,
             }
             for _, r in tasks_df.iterrows()
         ]
         pd.DataFrame(empty).to_csv(completion_csv_path, index=False)
     finally:
         os.chdir(orig_cwd)
-        # 快照模式结束后恢复一次，保持容器干净状态
         if _snapshot_container:
-            logger.info("[snapshot] 所有任务完成，恢复容器 /data 到初始状态")
+            logger.info("[snapshot] All tasks done — restoring container /data to initial state")
             docker_snapshot_restore(_snapshot_container)
 
-    # ── Step 2: 逐任务 GT 生成 + 打分 ────────────────────────────────────────
-    result_df = evaluate_from_completion_csv(
-        completion_csv_path=str(completion_csv_path),
-        output_csv_path=output_csv,
-        pass_threshold=pass_threshold,
-        jsonl_path=jsonl_path,
-        json_output_dir=json_output_dir,
-    )
+    if _inline_scored:
+        result_df = pd.DataFrame(_inline_result_rows)
+        print_eval_report(result_df, pass_threshold)
+        logger.info(f"Results saved to: {_inline_out_csv}")
+        logger.info(f"Per-task JSON written to: {_inline_json_dir}/")
+    else:
+        result_df = evaluate_from_completion_csv(
+            completion_csv_path=str(completion_csv_path),
+            output_csv_path=output_csv,
+            pass_threshold=pass_threshold,
+            jsonl_path=jsonl_path,
+            json_output_dir=json_output_dir,
+        )
 
     try:
         Path(tmp_csv).unlink(missing_ok=True)

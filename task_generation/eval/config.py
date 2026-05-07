@@ -1,6 +1,6 @@
-"""路径配置、环境变量加载、可选依赖初始化。
+"""Path configuration, environment variable loading, and optional dependency initialisation.
 
-所有 eval/ 子模块从这里 import 全局常量，避免重复初始化。
+All eval/ sub-modules import global constants from here to avoid repeated initialisation.
 """
 
 import logging

@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "hallu-eval"
 version = "0.1.0"
-description = "幻觉类型感知的 MCP Agent 评测工具集"
+description = "Hallucination-type-aware MCP agent evaluation toolkit"
 requires-python = ">=3.10,<3.14"
 dependencies = [
     "pandas>=2.0.3",
@@ -25,17 +25,17 @@ dependencies = [
     "matplotlib>=3.8.0",
 ]
 
-# ── CLI 入口点 ──────────────────────────────────────────────────────────────
-# uv run hallu-eval   → hallu_eval.py  (幻觉评测主流程)
-# uv run hallu-gt     → run_gt_execution.py (预跑 GT 执行日志)
+# ── CLI entry points ────────────────────────────────────────────────────────
+# uv run hallu-eval   → hallu_eval.py         (main evaluation pipeline)
+# uv run hallu-gt     → run_gt_execution.py   (pre-run GT execution logs)
 [project.scripts]
 hallu-eval = "hallu_eval:main"
 hallu-gt   = "run_gt_execution:main"
 
 [tool.hatch.build.targets.wheel]
-# 将当前目录下的两个独立脚本视为顶层模块
+# Treat both standalone scripts as top-level modules
 packages = ["."]
-# 只打包这两个文件，忽略 tasks/ prompts/ 等数据目录
+# Only include these two files; exclude tasks/, prompts/, and other data dirs
 include = ["hallu_eval.py", "run_gt_execution.py"]
 
 [dependency-groups]
@@ -44,5 +44,4 @@ dev = [
 ]
 
 [tool.uv]
-index-url = "http://pypi.sankuai.com/simple"
-trusted-host = ["pypi.sankuai.com"]
+

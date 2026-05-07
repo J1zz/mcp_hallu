@@ -1,2 +1,4 @@
-*.csv
 *.pyc
+__pycache__/
+.venv/
+.claude/

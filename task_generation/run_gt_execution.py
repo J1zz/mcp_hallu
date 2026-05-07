@@ -1,16 +1,17 @@
-"""run_gt_execution.py — GT (Ground Truth) 执行脚本
+"""run_gt_execution.py — GT (Ground Truth) execution script
 
-从 task JSONL 文件中读取 dynamic_reference_script，逐条执行
-generate_reference_answer()，将执行日志（gt_execution_log）写回输出 JSONL。
+Reads dynamic_reference_script from task JSONL files, executes
+generate_reference_answer() for each task, and writes the execution log
+(gt_execution_log) back to the output JSONL.
 
-用法:
+Usage:
   python run_gt_execution.py --input tasks/reasoning_generated_tasks.jsonl \\
                              --output gt/reasoning_with_gt.jsonl
 
-选项:
-  --limit N      只处理前 N 条任务（调试用）
-  --no-rollback  禁用写操作补偿回滚（默认启用）
-  --verbose      打印失败任务的完整 traceback
+Options:
+  --limit N      Process only the first N tasks (for debugging)
+  --no-rollback  Disable write-operation compensating rollback (enabled by default)
+  --verbose      Print full traceback for failed tasks
 """
 
 import argparse
@@ -31,27 +32,28 @@ from mcp_utils import (
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 1. 智能 json 模块：注入到脚本 namespace，让 json.loads() 不再崩溃 ─────────────
-# dynamic_reference_script 里大量写了 json.loads(raw) 来解析工具返回值。
-# 现在工具返回值已由 _parse_tool_response 处理过，绝大多数情况已是 dict/list；
-# 但脚本里仍可能对 dict/list 再次调用 json.loads()（如 json.loads(result) 而 result 已是 dict）。
-# _make_smart_json 返回的对象：
-#   - json.loads(x)：若 x 已是 dict/list 直接返回；若是字符串调用 _parse_tool_response 适配
-#   - json.dumps / json.dump 等其他方法保持原样
+# 1. Smart json module: injected into script namespace so json.loads() no longer crashes ──────
+# dynamic_reference_script extensively calls json.loads(raw) to parse tool return values.
+# Tool return values have already been processed by _parse_tool_response, so most are dict/list;
+# but scripts may still call json.loads() again on a dict/list
+# (e.g. json.loads(result) where result is already a dict).
+# The object returned by _make_smart_json:
+#   - json.loads(x): if x is already dict/list, return directly; if string, adapt via _parse_tool_response
+#   - json.dumps / json.dump and other methods remain unchanged
 
 def _make_smart_json():
-    """返回一个行为与标准 json 模块相同、但 loads() 对非 JSON 内容宽容的对象。"""
+    """Return an object identical to the standard json module except loads() is lenient with non-JSON content."""
     mod = _types.ModuleType("json")
-    # 拷贝所有标准 json 属性
+    # Copy all standard json attributes
     for attr in dir(json):
         if not attr.startswith("__"):
             setattr(mod, attr, getattr(json, attr))
 
     def _smart_loads(s, **kwargs):
-        # 已是 dict/list（call_tool 返回的已适配对象），直接返回
+        # Already dict/list (adapted object returned by call_tool), return directly
         if isinstance(s, (dict, list)):
             return s
-        # 字符串：先尝试标准解析，失败则走 _parse_tool_response 适配
+        # String: try standard parsing first, fall back to _parse_tool_response on failure
         if isinstance(s, (bytes, bytearray)):
             s = s.decode(kwargs.pop("encoding", "utf-8"), errors="replace")
         try:
@@ -64,9 +66,9 @@ def _make_smart_json():
 
 
 def _call_tool_sync_compat(tool_name_or_server: str, tool_args_or_name=None, tool_args_3rd=None) -> str:
-    """兼容两种调用签名：
-    - call_tool_sync(tool_name, args)         两参数
-    - call_tool_sync(server, tool_name, args) 三参数（server + tool_name 合并为 server_tool_name）
+    """Support two calling signatures:
+    - call_tool_sync(tool_name, args)          two-argument form
+    - call_tool_sync(server, tool_name, args)  three-argument form (server + tool_name merged)
     """
     if tool_args_3rd is not None:
         full_name = f"{tool_name_or_server}_{tool_args_or_name}"
@@ -75,11 +77,11 @@ def _call_tool_sync_compat(tool_name_or_server: str, tool_args_or_name=None, too
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 2. 写操作补偿（Compensating Transactions）
+# 2. Write-operation Compensation (Compensating Transactions)
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _extract_id(result: Any, *fields: str) -> Optional[str]:
-    """从工具返回值中尝试提取资源 ID（按给定字段名顺序查找）。"""
+    """Attempt to extract a resource ID from a tool return value (searches field names in given order)."""
     if isinstance(result, dict):
         for field in fields:
             if field in result:
@@ -91,7 +93,7 @@ def _extract_id(result: Any, *fields: str) -> Optional[str]:
 
 
 def _parse_result(raw: Any) -> Any:
-    """将工具原始返回字符串解析为 Python 对象，失败则原样返回。"""
+    """Parse the raw tool return into a Python object; return as-is on failure."""
     if isinstance(raw, (dict, list)):
         return raw
     try:
@@ -100,17 +102,20 @@ def _parse_result(raw: Any) -> Any:
         return raw
 
 
-# 补偿映射表：tool_name → callable(args, parsed_result) → (inverse_tool, inverse_args) | None
+# Compensation map: tool_name → callable(args, parsed_result) → (inverse_tool, inverse_args) | None
 #
-# 只覆盖「可从调用结果中提取到足够回滚信息」的写操作（A 类可逆工具）。
-# 对于无法自动逆向的操作（github_push_files、mongodb_drop-collection 等），
-# 不在此表中注册，任务设计层面应避免在 GT 脚本中使用。
+# Only covers write operations where enough rollback info can be extracted from the call result
+# (Class A reversible tools). Operations that cannot be automatically reversed
+# (e.g. github_push_files, mongodb_drop-collection) are not registered here;
+# task design should avoid using them in GT scripts.
 COMPENSATION_MAP: Dict[str, Callable] = {
 
-    # ── 文件系统写操作（最常见，memory/reasoning 任务大量使用）────────────────
-    # 写文件 → 删除该文件（若文件在任务前不存在则删除即可还原；若已存在则会误删）
-    # 注意：此处采用「删除」语义，适合 GT 脚本创建新文件的场景。
-    # 若任务是「覆盖已有文件」，删除会改变状态——但 GT 脚本通常创建新文件，风险可接受。
+    # ── Filesystem write ops (most common; heavily used in memory/reasoning tasks) ────────────
+    # Write file → delete that file (if file didn't exist before the task, deletion restores state;
+    #                                if it already existed, deletion may be incorrect)
+    # Note: using "delete" semantics; suitable for GT scripts that create new files.
+    # If the task overwrites an existing file, deletion changes state — but GT scripts typically
+    # create new files, so this risk is acceptable.
     "desktop-commander_write_file": lambda args, res: (
         "desktop-commander_delete_file",
         {"path": args.get("path")},
@@ -121,11 +126,12 @@ COMPENSATION_MAP: Dict[str, Callable] = {
         {"path": args.get("path")},
     ) if args.get("path") else None,
 
-    "desktop-commander_edit_block": lambda args, res: None,  # 覆盖编辑无法自动逆向，跳过
+    "desktop-commander_edit_block": lambda args, res: None,  # Overwrite edits cannot be auto-reversed, skip
 
-    # 创建目录 → 删除该目录（仅在目录为空时有效；若任务往里写了文件则先被上面规则回滚）
+    # Create directory → delete that directory (only effective when empty;
+    #                                             any files written inside are rolled back by the rules above first)
     "desktop-commander_create_directory": lambda args, res: (
-        "desktop-commander_delete_file",  # desktop-commander 用 delete_file 删目录
+        "desktop-commander_delete_file",  # desktop-commander uses delete_file to remove directories too
         {"path": args.get("path")},
     ) if args.get("path") else None,
 
@@ -195,13 +201,13 @@ COMPENSATION_MAP: Dict[str, Callable] = {
 
 
 class CompensationRegistry:
-    """记录 GT 执行过程中的写操作，任务结束后按逆序执行补偿（回滚）。
+    """Records write operations during GT execution; executes compensation (rollback) in reverse order after task completion.
 
-    工作流：
+    Workflow:
       registry = CompensationRegistry()
       result = registry.tracked_call(tool_name, args)
-      # ... 执行完毕后 ...
-      registry.rollback()   ← 逆序撤销所有已记录的写操作
+      # ... after execution completes ...
+      registry.rollback()   ← reverse-order undo of all recorded write operations
     """
 
     def __init__(self, enabled: bool = True):
@@ -209,14 +215,15 @@ class CompensationRegistry:
         self._log: List[Tuple[str, dict, Any]] = []
 
     def tracked_call(self, tool_name: str, args: dict) -> str:
-        """调用工具；若该工具在补偿映射表中，则将结果追加到回滚日志。"""
+        """Invoke a tool; if it is in the compensation map, append the result to the rollback log."""
         raw_result = _call_tool_sync_impl(tool_name, args)
         if self.enabled and tool_name in COMPENSATION_MAP:
             self._log.append((tool_name, args, _parse_result(raw_result)))
         return raw_result
 
     def rollback(self):
-        """逆序执行所有已记录写操作的补偿调用；单条失败只记录警告，不中断整体。"""
+        """Execute compensation calls for all recorded write operations in reverse order;
+        a single failure only logs a warning without stopping the overall rollback."""
         if not self.enabled or not self._log:
             return
         for tool_name, args, result in reversed(self._log):
@@ -228,10 +235,10 @@ class CompensationRegistry:
                 if compensation is None:
                     continue
                 inv_tool, inv_args = compensation
-                # 若任意必填参数为 None，则跳过（无法安全回滚）
+                # Skip if any required argument is None (cannot safely rollback)
                 if any(v is None for v in inv_args.values()):
                     print(
-                        f"  [rollback skip] {tool_name}: 缺少必要参数 {inv_args}",
+                        f"  [rollback skip] {tool_name}: missing required arg(s) {inv_args}",
                         file=sys.stderr,
                     )
                     continue
@@ -242,7 +249,7 @@ class CompensationRegistry:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 3. 虚拟 mcp_client 模块注入（供 exec() 内的脚本导入）
+# 3. Virtual mcp_client module injection (for scripts imported inside exec())
 # ──────────────────────────────────────────────────────────────────────────────
 
 _mcp_client_mod = _types.ModuleType("mcp_completion.mcp_client")
@@ -252,7 +259,7 @@ sys.modules["mcp_completion.mcp_client"] = _mcp_client_mod
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 4. 单任务 GT 执行
+# 4. Single-task GT execution
 # ──────────────────────────────────────────────────────────────────────────────
 
 def run_one_gt_script(
@@ -261,13 +268,13 @@ def run_one_gt_script(
     verbose: bool = False,
     rollback: bool = True,
 ) -> Tuple[dict, bool]:
-    """执行 ground_truth 脚本/断言，将结果写入 gt_execution_log。
+    """Execute the ground_truth script/assertions and write results to gt_execution_log.
 
-    - dynamic_script：执行 generate_reference_answer()，回滚写操作。
-    - state_check：逐条执行 state_assertions 里的 code（注入 call_tool），
-                   把各断言实际值记录到 gt_execution_log。
+    - dynamic_script: executes generate_reference_answer() and rolls back write operations.
+    - state_check: execs each code snippet in state_assertions (call_tool injected),
+                   recording each assertion's actual value to gt_execution_log.
 
-    返回 (更新后的 task 字典, 是否成功)。
+    Returns (updated task dict, success flag).
     """
     out = dict(task)
     out.setdefault("gt_execution_log", None)
@@ -277,11 +284,11 @@ def run_one_gt_script(
     gt = task.get("ground_truth") or {}
     strategy = gt.get("strategy")
 
-    # ── state_check 分支 ──────────────────────────────────────────────────────
+    # ── state_check branch ──────────────────────────────────────────────────────
     if strategy == "state_check":
         return _run_state_check_gt(task, out, gt, verbose)
 
-    # ── dynamic_script 分支 ───────────────────────────────────────────────────
+    # ── dynamic_script branch ─────────────────────────────────────────────────────
     script_src = (gt.get("dynamic_reference_script") or "").strip()
     if strategy != "dynamic_script" or not script_src:
         out["gt_execution_error"] = "skip: no dynamic_script or empty script"
@@ -295,7 +302,7 @@ def run_one_gt_script(
             return registry.tracked_call(full_name, tool_args_3rd)
         return registry.tracked_call(tool_name_or_server, tool_args_or_name or {})
 
-    # 注入轻量 mcp_client 模块（兼容 "from mcp_client import call_tool" 写法）
+    # Inject lightweight mcp_client module (compatible with "from mcp_client import call_tool" usage)
     _mcp_client_simple = _types.ModuleType("mcp_client")
     _mcp_client_simple.call_tool = _tracked_compat        # type: ignore
     _mcp_client_simple.call_tool_sync = _tracked_compat   # type: ignore
@@ -349,8 +356,8 @@ def _run_state_check_gt(
     gt: dict,
     verbose: bool,
 ) -> Tuple[dict, bool]:
-    """执行 state_check 类型任务的 GT pre-run：逐条 exec state_assertions 代码，
-    注入 call_tool，读取 namespace['result']，记录实际值到 gt_execution_log。
+    """GT pre-run for state_check tasks: execs each state_assertions code snippet,
+    injects call_tool, reads namespace['result'], and records actual values to gt_execution_log.
     """
     from mcp_utils import call_tool as _call_tool
 
@@ -415,21 +422,21 @@ def _run_state_check_gt(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 5. CLI 入口
+# 5. CLI entry point
 # ──────────────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
-        description="对生成任务执行 generate_reference_answer() 并写出 GT 结果 JSONL。"
+        description="Execute generate_reference_answer() on generated tasks and write GT result JSONL."
     )
-    parser.add_argument("--input", required=True, help="输入 JSONL 文件路径")
+    parser.add_argument("--input", required=True, help="Input JSONL file path")
     parser.add_argument(
         "--output", required=True,
-        help="输出 JSONL 文件路径（每行新增 gt_execution_log / gt_execution_error / gt_execution_ok）",
+        help="Output JSONL file path (each line gains gt_execution_log / gt_execution_error / gt_execution_ok)",
     )
-    parser.add_argument("--limit", type=int, default=None, help="只处理前 N 条任务")
-    parser.add_argument("--no-rollback", action="store_true", help="禁用写操作补偿回滚")
-    parser.add_argument("--verbose", action="store_true", help="打印失败任务的完整 traceback")
+    parser.add_argument("--limit", type=int, default=None, help="Process only the first N tasks")
+    parser.add_argument("--no-rollback", action="store_true", help="Disable write-operation compensating rollback")
+    parser.add_argument("--verbose", action="store_true", help="Print full traceback for failed tasks")
     args = parser.parse_args()
 
     input_path = Path(args.input)

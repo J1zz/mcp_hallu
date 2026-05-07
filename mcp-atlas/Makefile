@@ -7,7 +7,7 @@ GHCR_REPO = ghcr.io/scaleapi/mcp-atlas
 .PHONY: build run run-docker shell test run-mcp-completion push
 
 run-docker: # run docker container for mcp servers (agent-environment service)
-	docker run --rm -p 1984:1984 --env-file .env $(IMAGE_NAME):latest
+	docker run --rm -p 19841:1984 --env-file .env $(IMAGE_NAME):latest
 
 build: # builds agent-environment
 	cd services/agent-environment && docker buildx build --platform linux/amd64 -t $(IMAGE_NAME) .

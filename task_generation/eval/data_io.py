@@ -1,4 +1,4 @@
-"""数据加载与转换：JSONL → Task，Task → CSV，completion CSV → Task。"""
+"""Data loading and conversion: JSONL → Task, Task → CSV, completion CSV → Task."""
 
 import json
 import logging
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 def _parse_json_col(val: Any, default: Any) -> Any:
-    """安全解析 CSV 单元格中的 JSON 字符串；失败返回 default。"""
+    """Safely parse a JSON string from a CSV cell; returns default on failure."""
     if not val:
         return default
     try:
@@ -24,10 +24,10 @@ def _parse_json_col(val: Any, default: Any) -> Any:
 
 
 def load_tasks_from_jsonl(jsonl_path: str) -> List[Task]:
-    """从 task JSONL 文件加载 Task 列表。"""
+    """Load a list of Task objects from a task JSONL file."""
     path = Path(jsonl_path)
     if not path.exists():
-        raise FileNotFoundError(f"JSONL 文件不存在: {jsonl_path}")
+        raise FileNotFoundError(f"JSONL file not found: {jsonl_path}")
 
     tasks = []
     with open(path, encoding="utf-8") as f:
@@ -38,7 +38,7 @@ def load_tasks_from_jsonl(jsonl_path: str) -> List[Task]:
             try:
                 obj = json.loads(line)
             except json.JSONDecodeError as e:
-                logger.warning(f"第 {idx+1} 行解析失败，跳过: {e}")
+                logger.warning(f"Failed to parse line {idx+1}, skipping: {e}")
                 continue
             tasks.append(Task(
                 task_id=obj.get("task_id") or f"{path.stem}_{idx}",
@@ -55,16 +55,17 @@ def load_tasks_from_jsonl(jsonl_path: str) -> List[Task]:
                 gt_execution_ok=bool(obj.get("gt_execution_ok", False)),
             ))
 
-    logger.info(f"加载了 {len(tasks)} 条任务（{jsonl_path}）")
+    logger.info(f"Loaded {len(tasks)} tasks from {jsonl_path}")
     return tasks
 
 
 def tasks_to_csv(tasks: List[Task], output_path: str) -> pd.DataFrame:
-    """将 Task 列表写成 mcp_completion_script.py 可直接读取的 CSV。"""
+    """Write a list of Tasks to a CSV that can be directly read by mcp_completion_script.py."""
     rows = []
     for t in tasks:
-        # 保留完整 claims 结构（含 required_tool、branch、dependency_on_step 等字段），
-        # 而不是降级为纯字符串列表，否则依赖顺序验证和分支验证会因字段缺失而失效
+        # Preserve the full claims structure (including required_tool, branch, dependency_on_step, etc.)
+        # rather than downgrading to a plain string list, otherwise dependency-order and branch
+        # validation will break due to missing fields.
         claims_serializable = [
             c if isinstance(c, dict) else {"description": c}
             for c in t.claims
@@ -73,7 +74,7 @@ def tasks_to_csv(tasks: List[Task], output_path: str) -> pd.DataFrame:
             "TASK":               t.task_id,
             "ENABLED_TOOLS":      json.dumps(t.available_tools, ensure_ascii=False),
             "PROMPT":             t.prompt,
-            "TRAJECTORY":         t.gt_execution_log or "",
+            "GT_EXECUTION_LOG": t.gt_execution_log or "",
             "GTFA_CLAIMS":        json.dumps(claims_serializable, ensure_ascii=False),
             "HALLUCINATION_TYPE": t.hallucination_type,
             "BUCKET":             t.bucket,
@@ -88,18 +89,18 @@ def tasks_to_csv(tasks: List[Task], output_path: str) -> pd.DataFrame:
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(out, index=False)
-    logger.info(f"写入 {len(rows)} 条任务至 CSV: {out}")
+    logger.info(f"Wrote {len(rows)} tasks to CSV: {out}")
     return df
 
 
 def build_tasks_from_completion_csv(df: pd.DataFrame) -> List[Task]:
-    """从 completion CSV 重建 Task 对象列表（仅用于评分）。"""
+    """Rebuild a list of Task objects from a completion CSV (used for scoring only)."""
     tasks = []
     for idx, row in df.iterrows():
         assertions   = _parse_json_col(row.get("STATE_ASSERTIONS"), [])
         claims_raw   = _parse_json_col(row.get("GTFA_CLAIMS"), [])
         claims       = [{"description": c} if isinstance(c, str) else c for c in claims_raw]
-        gt_log       = _safe_str(row.get("TRAJECTORY", ""))
+        gt_log       = _safe_str(row.get("GT_EXECUTION_LOG") or row.get("TRAJECTORY", ""))
         gt_strategy  = _safe_str(row.get("GT_STRATEGY", ""))
 
         tasks.append(Task(

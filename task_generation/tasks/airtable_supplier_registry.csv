@@ -1,0 +1,16 @@
+SupplierID,SupplierName,Category,Country,ContractStart,ContractEnd,AnnualValue_USD,PaymentTermsDays,QualityScore,DeliveryOnTime_Pct,DefectRate_Pct,TierLevel,CertISO,ActiveProjects,RiskLevel
+SUP-001,Apex Components Ltd,Electronics,Germany,2022-01-01,2025-12-31,2400000,30,92,97.5,0.8,Tier1,Yes,8,Low
+SUP-002,ShineTech Manufacturing,Electronics,China,2023-03-01,2026-02-28,1800000,45,85,91.2,2.1,Tier2,Yes,5,Medium
+SUP-003,Nordic Raw Materials,Raw Materials,Sweden,2021-06-01,2024-05-31,950000,60,88,95.0,1.2,Tier2,Yes,3,Low
+SUP-004,Global Plastics Co,Packaging,USA,2023-01-01,2024-12-31,430000,30,79,88.5,3.4,Tier3,No,2,High
+SUP-005,PrecisionParts India,Mechanical,India,2022-09-01,2025-08-31,670000,45,91,94.1,1.0,Tier2,Yes,4,Low
+SUP-006,FastLog Freight,Logistics,Netherlands,2023-07-01,2026-06-30,3100000,15,96,99.1,0.2,Tier1,Yes,12,Low
+SUP-007,Chem Solutions GmbH,Chemicals,Germany,2022-04-01,2025-03-31,1200000,45,87,93.7,1.5,Tier2,Yes,6,Medium
+SUP-008,EastPack Vietnam,Packaging,Vietnam,2024-01-01,2025-12-31,280000,60,74,82.3,4.8,Tier3,No,1,High
+SUP-009,TechFab Korea,Electronics,South Korea,2021-11-01,2024-10-31,3600000,30,94,98.2,0.5,Tier1,Yes,10,Low
+SUP-010,Andean Metals Corp,Raw Materials,Chile,2023-02-01,2026-01-31,780000,60,82,89.9,2.7,Tier3,Yes,3,Medium
+SUP-011,Quantum Coatings,Chemicals,USA,2022-07-01,2025-06-30,510000,30,90,95.8,0.9,Tier2,Yes,4,Low
+SUP-012,MegaPrint Agency,Marketing,UK,2024-03-01,2025-02-28,190000,30,88,100.0,0.0,Tier3,No,2,Low
+SUP-013,Reliable Bearings Ltd,Mechanical,Japan,2021-04-01,2024-03-31,860000,45,95,97.8,0.4,Tier1,Yes,5,Low
+SUP-014,AfriTex Fabrics,Raw Materials,South Africa,2023-10-01,2025-09-30,340000,60,77,84.6,3.9,Tier3,No,1,High
+SUP-015,CloudStore Infra,IT Services,USA,2023-06-01,2026-05-31,720000,30,93,99.9,0.1,Tier2,Yes,7,Low

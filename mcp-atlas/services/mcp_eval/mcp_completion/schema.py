@@ -1,6 +1,5 @@
 """Schema definitions for MCP evaluation."""
 
-from litellm.types.utils import Message as MessageType
 from typing import Dict, List, Literal, Optional, Union, Any
 from pydantic import BaseModel, Field
 
@@ -38,9 +37,28 @@ class AssistantMessage(BaseModel):
     """Assistant message."""
 
     role: Literal["assistant"]
-    original_message: MessageType
     content: Optional[str] = None
     tool_calls: Optional[List[ToolCall]] = None
+    # Raw provider parts preserved for multi-turn replay (e.g. Gemini thinking blocks).
+    raw_parts: Optional[List[Dict[str, Any]]] = None
+
+    def model_dump(self, **kwargs) -> Dict[str, Any]:
+        """Serialize to OpenAI-compatible format, omitting None fields."""
+        result: Dict[str, Any] = {"role": self.role}
+        if self.content is not None:
+            result["content"] = self.content
+        if self.tool_calls is not None:
+            result["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": tc.type,
+                    "function": dict(tc.function),
+                }
+                for tc in self.tool_calls
+            ]
+        if self.raw_parts is not None:
+            result["raw_parts"] = self.raw_parts
+        return result
 
 
 class TextContent(BaseModel):

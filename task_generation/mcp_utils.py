@@ -1,25 +1,32 @@
-"""mcp_utils.py — 共享的 MCP 工具调用底层逻辑
+"""mcp_utils.py — shared low-level MCP tool-call logic
 
-从 run_gt_execution.py 抽出，供 GT 执行（run_gt_execution.py）
-和评分（eval/scoring.py）共同使用，避免重复维护。
+Extracted from run_gt_execution.py for shared use by GT execution (run_gt_execution.py)
+and scoring (eval/scoring.py), avoiding duplicated maintenance.
 """
 
 import json
 import os
 import re
+import time
+from pathlib import Path
 from typing import Any
 
 import requests
+from dotenv import load_dotenv
 
-MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:1984")
+# Load mcp-atlas/.env first so that MCP_SERVER_URL etc. are available before module-level reads
+_env_path = Path(__file__).resolve().parent.parent / "mcp-atlas" / ".env"
+load_dotenv(_env_path if _env_path.exists() else None)
+
+MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:19841")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 工具返回值解析
+# Tool response parsing
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _parse_tool_response(raw: Any) -> Any:
-    """将工具返回的任意格式统一适配为 Python 对象（dict/list）或原始字符串。"""
+    """Normalise a tool response of any format to a Python object (dict/list) or raw string."""
     if isinstance(raw, (dict, list)):
         return raw
     if not isinstance(raw, str):
@@ -41,7 +48,7 @@ def _parse_tool_response(raw: Any) -> Any:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 工具参数适配
+# Tool argument adaptation
 # ──────────────────────────────────────────────────────────────────────────────
 
 _TOOLS_NEEDING_PARAMS_WRAP = frozenset({
@@ -86,7 +93,7 @@ _REDIRECT_PATH_PREFIXES = [
 
 
 def _adapt_tool_args(tool_name: str, tool_args: dict) -> dict:
-    """对工具参数进行运行时适配（params 包裹 + 文件路径重定向）。"""
+    """Apply runtime adaptations to tool arguments (params wrapping + file-path redirection)."""
     adapted = dict(tool_args)
     if tool_name in _TOOLS_NEEDING_PARAMS_WRAP and "params" not in adapted:
         return {"params": adapted}
@@ -106,31 +113,50 @@ def _adapt_tool_args(tool_name: str, tool_args: dict) -> dict:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 工具调用
+# Tool invocation
 # ──────────────────────────────────────────────────────────────────────────────
 
-def call_tool(tool_name: str, tool_args: dict) -> Any:
-    """同步调用 MCP Server（1984 端口）执行工具，返回 Python 对象。
+def call_tool(tool_name: str, tool_args: dict, _retries: int = 3, _backoff: float = 2.0) -> Any:
+    """Synchronously invoke a tool via the MCP Server and return a Python object.
 
-    这是 GT 执行脚本和评分断言代码的统一入口。
+    This is the unified entry-point for GT execution scripts and scoring assertion code.
+    Automatically retries with exponential backoff on transient errors (500/429 rate-limit
+    proxy wrapping), up to _retries attempts.
     """
     tool_args = _adapt_tool_args(tool_name, tool_args or {})
     url = f"{MCP_SERVER_URL}/call-tool"
     payload = {"tool_name": tool_name, "tool_args": tool_args}
-    try:
-        resp = requests.post(url, json=payload, timeout=60)
-        resp.raise_for_status()
-        data = resp.json()
-        if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
-            raw_text = data[0].get("text", json.dumps(data))
-            return _parse_tool_response(raw_text)
-        return _parse_tool_response(data)
-    except requests.exceptions.ConnectionError:
-        raise RuntimeError(
-            f"无法连接到 MCP Server ({url})。"
-            f"请先启动：cd mcp-atlas && make run-agent-environment"
-        )
-    except requests.exceptions.Timeout:
-        raise RuntimeError(f"工具调用超时（60s）：{tool_name}")
-    except Exception as e:
-        raise RuntimeError(f"工具调用失败 {tool_name}: {e}")
+    last_exc: Exception = RuntimeError("unknown")
+    for attempt in range(_retries):
+        try:
+            resp = requests.post(url, json=payload, timeout=60)
+            resp.raise_for_status()
+            data = resp.json()
+            if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
+                raw_text = data[0].get("text", json.dumps(data))
+                return _parse_tool_response(raw_text)
+            return _parse_tool_response(data)
+        except requests.exceptions.ConnectionError:
+            raise RuntimeError(
+                f"Cannot connect to MCP Server ({url}). "
+                f"Start it first: cd mcp-atlas && make run-agent-environment"
+            )
+        except requests.exceptions.Timeout:
+            # Retry timeouts once with a short backoff; they may be transient
+            if attempt < _retries - 1:
+                time.sleep(_backoff)
+                last_exc = RuntimeError(f"Tool call timed out (60s): {tool_name}")
+                continue
+            raise RuntimeError(f"Tool call timed out (60s): {tool_name}")
+        except requests.exceptions.HTTPError as e:
+            status = e.response.status_code if e.response is not None else 0
+            # Retry on 429 (rate limit) and 500/502/503 (transient server errors)
+            if status in (429, 500, 502, 503) and attempt < _retries - 1:
+                wait = _backoff * (2 ** attempt)
+                time.sleep(wait)
+                last_exc = RuntimeError(f"Tool call failed {tool_name}: {e}")
+                continue
+            raise RuntimeError(f"Tool call failed {tool_name}: {e}")
+        except Exception as e:
+            raise RuntimeError(f"Tool call failed {tool_name}: {e}")
+    raise last_exc

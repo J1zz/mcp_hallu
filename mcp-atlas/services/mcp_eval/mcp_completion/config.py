@@ -18,6 +18,7 @@ class Config:
     # LLM configuration
     LLM_BASE_URL: str = os.getenv("LLM_BASE_URL", "")
     LLM_API_KEY: str = os.getenv("LLM_API_KEY", "")
+    LLM_STREAM: bool = os.getenv("LLM_STREAM", "").strip().lower() in {"1", "true", "yes", "on"}
 
     # MCP Server configuration
     MCP_SERVER_URL: str = os.getenv("MCP_SERVER_URL", "http://localhost:1984")

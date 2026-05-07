@@ -75,14 +75,14 @@ By default, [20 servers](services/agent-environment/src/agent_environment/mcp_cl
 
 Confirm that all 20 servers are online. You should see `"total":20,"online":20,"offline":0` and the list of servers. [Expected response](https://gist.github.com/geobio/88b1c4bed8148a8fbfb28628c384d5e1)
 ```bash
-curl -s http://localhost:1984/enabled-servers | jq -c
+curl -s http://localhost:19841/enabled-servers | jq -c
 ```
 
 When you call `/enabled-servers`, if any error, Ctrl + C and re-run. If the docker container does not shut down gracefully, use `docker ps` and `docker kill <ID>` to force it to shut down.
 
 Test a tool call to the `filesystem` MCP server. [Expected response](https://gist.github.com/geobio/65a9a2d9a07a4b9117a312030a7a3830)
 ```bash
-curl -X POST http://localhost:1984/call-tool \
+curl -X POST http://localhost:19841/call-tool \
   -H "Content-Type: application/json" \
   -d '{
     "tool_name": "filesystem_read_text_file",
@@ -106,10 +106,10 @@ This starts the MCP completion service on port 3000. It provides an API that con
 Test a call the MCP completion service. The expected answer is "Customer". [Expected response](https://gist.github.com/geobio/6e0560846800a1799431c96e64b8254d)
 
 ```bash
-curl -X POST http://localhost:3000/v2/mcp_eval/run_agent \
+curl -X POST http://localhost:3001/v2/mcp_eval/run_agent \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "openai/gpt-5.1",
+    "model": "openai/gpt-4o-2024-08-06",
     "messages": [{"role": "user", "content": "What is the first word of the file at /data/Barber Shop.csv?"}],
     "enabledTools": ["filesystem_read_text_file"],
     "maxTurns": 20

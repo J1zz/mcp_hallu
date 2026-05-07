@@ -1,0 +1,16 @@
+CampaignID,CampaignName,Channel,Region,StartDate,EndDate,Budget_USD,Spend_USD,Impressions,Clicks,Conversions,Revenue_USD,Status
+MKT-001,Spring Launch 2024,Email,North America,2024-03-01,2024-03-31,50000,47200,850000,32000,1240,185000,Completed
+MKT-002,Brand Awareness Q1,Social Media,Europe,2024-01-15,2024-02-15,80000,79100,3200000,95000,2100,320000,Completed
+MKT-003,Retargeting Wave 1,Display,APAC,2024-02-01,2024-02-28,30000,28500,1200000,18000,540,72000,Completed
+MKT-004,Summer Sale Push,Search,North America,2024-06-01,2024-06-30,120000,118700,980000,67000,3800,560000,Active
+MKT-005,Influencer Collab Q2,Social Media,Latin America,2024-04-01,2024-05-31,60000,55000,5400000,210000,4200,380000,Active
+MKT-006,Product Launch Video,Video,Global,2024-05-15,2024-06-15,200000,185000,8900000,340000,5600,920000,Active
+MKT-007,Loyalty Reactivation,Email,North America,2024-04-10,2024-04-30,25000,24100,420000,28000,980,145000,Completed
+MKT-008,B2B Webinar Series,Webinar,Europe,2024-03-15,2024-05-15,40000,36000,0,8500,320,480000,Completed
+MKT-009,SEO Content Boost,Organic,Global,2024-01-01,2024-12-31,90000,45000,0,125000,3100,620000,Active
+MKT-010,Flash Sale Weekend,Search,North America,2024-05-10,2024-05-12,15000,14800,210000,42000,2100,189000,Completed
+MKT-011,Partner Co-Marketing,Email,Europe,2024-06-01,2024-07-31,35000,12000,310000,19000,560,98000,Active
+MKT-012,App Install Campaign,Mobile,APAC,2024-04-20,2024-05-20,55000,52300,4100000,180000,8900,267000,Completed
+MKT-013,Holiday Preview,Social Media,North America,2024-07-01,2024-08-31,70000,0,0,0,0,0,Planned
+MKT-014,Podcast Sponsorship,Audio,North America,2024-03-01,2024-06-30,45000,43500,620000,9800,290,87000,Active
+MKT-015,Trade Show EMEA,Event,Europe,2024-05-20,2024-05-23,110000,108000,0,4200,180,540000,Completed

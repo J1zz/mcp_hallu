@@ -1,0 +1,11 @@
+# Python
+__pycache__/
+*.py[oc]
+.venv/
+
+# IDE / tools
+.claude/
+.DS_Store
+
+# Secrets
+.env

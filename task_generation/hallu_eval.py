@@ -1,31 +1,31 @@
 """hallu_eval.py
 
-完整评测流程（无需预跑 GT）：
+Full evaluation pipeline (no need to pre-run GT):
 
-  uv run hallu-eval --input new_task/confusion_tasks.jsonl \\
-                    --model openai/gpt-4o-2024-05-13 \\
-                    --output results/confusion_eval.csv
+  uv run hallu-eval --input final_tasks/memory_tasks.jsonl \
+                    --model gpt-5-chat-2025-08-07 \
+                    --docker-snapshot
 
-流程说明
---------
-1. 加载 JSONL 任务（支持 Confusion / Void / Memory / Reasoning 四种类型）
-2. 启动待测模型 Agent，并发执行所有任务（--concurrency 控制并发数）
-3. 每条任务 Agent 执行完毕后，立即：
-   a. 若任务类型为 Memory/Reasoning Trap 且 strategy=dynamic_script，
-      自动执行 GT 参考脚本（run_one_gt_script），生成 gt_execution_log
-      （与 LLM-as-judge 使用同一个 eval 模型配置）
-   b. 调用 route_and_score 打分
-   c. 写出单任务 JSON 结果文件（默认位于 results/task_results/<task_id>.json）
-   d. 追加到汇总 CSV
-4. 所有任务完成后打印汇总报告
+Pipeline overview
+-----------------
+1. Load JSONL tasks (supports Confusion / Void / Memory / Reasoning four hallucination types)
+2. Start the model-under-test Agent, execute all tasks concurrently (--concurrency controls parallelism)
+3. After each task Agent completes, immediately:
+   a. If the task type is Memory/Reasoning Trap and strategy=dynamic_script,
+      auto-run the GT reference script (run_one_gt_script) to generate gt_execution_log
+      (uses the same eval model config as LLM-as-judge)
+   b. Call route_and_score to score the task
+   c. Write per-task JSON result file (default: results/task_results/<task_id>.json)
+   d. Append to the summary CSV
+4. Print a summary report after all tasks complete
 
-跳过 Agent 执行，对已有 completion CSV 直接打分：
+Skip agent execution and score an existing completion CSV directly:
 
   uv run hallu-eval --from-completion-csv results/confusion_eval_completion.csv \\
                     --input new_task/confusion_tasks.jsonl \\
                     --output results/confusion_eval.csv
 
-仅将 JSONL 转为中间 CSV（调试用）：
+Convert JSONL to an intermediate CSV only (for debugging):
 
   uv run hallu-eval --input new_task/confusion_tasks.jsonl \\
                     --convert-only \\
@@ -36,7 +36,10 @@ import argparse
 import asyncio
 import logging
 import os
+import re
 import sys
+from pathlib import Path
+from typing import Optional
 
 from eval import (
     HallucinationType,
@@ -48,6 +51,56 @@ from eval import (
 
 logger = logging.getLogger(__name__)
 
+RESULTS_DIR = Path(__file__).parent / "results"
+
+
+def _model_slug(model: str) -> str:
+    """Convert a model identifier to a filesystem-safe directory name.
+
+    Examples:
+      "openai/gpt-4o"                  → "openai_gpt-4o"
+      "anthropic.claude-sonnet-4-6"    → "anthropic.claude-sonnet-4-6"
+    """
+    return re.sub(r"[/\\:*?\"<>|]", "_", model).strip("_")
+
+
+def _default_output(model: str, input_path: Optional[str]) -> str:
+    """Derive a default output CSV path under results/<model_slug>/."""
+    slug    = _model_slug(model)
+    stem    = Path(input_path).stem if input_path else "eval"
+    out_dir = RESULTS_DIR / slug
+    out_dir.mkdir(parents=True, exist_ok=True)
+    return str(out_dir / f"{stem}.csv")
+
+
+def _parse_rows(value: str) -> list[int]:
+    """Parse a row-selection string into a sorted list of 0-based indices.
+
+    Accepted formats (can be mixed with commas):
+      "5"        → [5]
+      "0,2,5"    → [0, 2, 5]
+      "0-4"      → [0, 1, 2, 3, 4]
+      "0,2-5,8"  → [0, 2, 3, 4, 5, 8]
+    """
+    indices: set[int] = set()
+    for part in value.split(","):
+        part = part.strip()
+        if "-" in part:
+            lo, hi = part.split("-", 1)
+            indices.update(range(int(lo), int(hi) + 1))
+        else:
+            indices.add(int(part))
+    return sorted(indices)
+
+
+def _apply_row_filter(tasks: list, args) -> list:
+    """Apply --rows and/or --num-tasks filtering to a task list."""
+    if args.rows is not None:
+        tasks = [tasks[i] for i in args.rows if i < len(tasks)]
+    if args.num_tasks:
+        tasks = tasks[:args.num_tasks]
+    return tasks
+
 
 def _parse_args():
     p = argparse.ArgumentParser(
@@ -55,36 +108,45 @@ def _parse_args():
         epilog=__doc__,
     )
     src = p.add_mutually_exclusive_group()
-    src.add_argument("--input", help="JSONL 任务文件（完整流程或搭配 --from-completion-csv 使用）")
-    src.add_argument("--from-completion-csv", dest="completion_csv", help="直接对已有 completion CSV 打分（跳过 Agent 执行）")
-    p.add_argument("--convert-only", action="store_true", help="仅将 JSONL 转为中间 CSV，不执行 Agent 也不评分（需配合 --input）")
-    p.add_argument("--output", required=True, help="输出 CSV 文件路径")
+    src.add_argument("--input", help="JSONL task file (full pipeline or combined with --from-completion-csv)")
+    src.add_argument("--from-completion-csv", dest="completion_csv", help="Score an existing completion CSV directly (skip agent execution)")
+    p.add_argument("--convert-only", action="store_true", help="Convert JSONL to intermediate CSV only, no agent execution or scoring (requires --input)")
+    p.add_argument("--output", default=None,
+                   help="Output CSV path (default: results/<model>/<input_stem>.csv)")
     p.add_argument("--model", default=os.getenv("LLM_MODEL", "openai/gpt-4o"))
-    p.add_argument("--server-url", default=os.getenv("SERVER_URL", "http://localhost:3000"), help="mcp-atlas Agent 服务地址")
-    p.add_argument("--concurrency", type=int, default=3, help="并发 Agent 请求数")
-    p.add_argument("--num-tasks", type=int, default=None, help="限制任务数量（调试用）")
-    p.add_argument("--pass-threshold", type=float, default=0.6, help="通过分数线 [0.0-1.0]")
+    p.add_argument("--server-url", default=os.getenv("SERVER_URL", "http://localhost:3001"), help="mcp-atlas agent server URL")
+    p.add_argument("--concurrency", type=int, default=3, help="number of concurrent agent requests")
+    p.add_argument("--num-tasks", type=int, default=None, help="limit task count (for debugging)")
+    p.add_argument(
+        "--rows",
+        type=_parse_rows,
+        default=None,
+        metavar="ROWS",
+        help="Specify task row indices to run (0-based): single '5', comma list '0,2,5', range '0-4', mixed '0,2-5,8'",
+    )
+    p.add_argument("--pass-threshold", type=float, default=0.8, help="pass score threshold [0.0-1.0]")
     p.add_argument(
         "--json-output-dir",
         default=None,
-        help="单任务 JSON 结果输出目录（默认：output CSV 同目录下的 task_results/）",
+        help="Per-task JSON result output directory (default: task_results/ under the output CSV directory)",
     )
-    # --input 可与 --from-completion-csv 搭配使用（为 dynamic_script 任务提供 GT 脚本）
-    # 当 --from-completion-csv 单独使用时，--input 可选
+    # --input can be combined with --from-completion-csv (to supply GT scripts for dynamic_script tasks)
+    # When --from-completion-csv is used alone, --input is optional
     p.add_argument(
         "--jsonl-for-gt",
         default=None,
         dest="jsonl_for_gt",
-        help="搭配 --from-completion-csv 使用：指定原始 JSONL 文件，为 dynamic_script 任务提供 GT 脚本（默认从 --input 取）",
+        help="Used with --from-completion-csv: specify original JSONL file to provide GT scripts for dynamic_script tasks (defaults to --input)",
     )
     p.add_argument(
         "--docker-snapshot",
         action="store_true",
         dest="docker_snapshot",
         help=(
-            "开启 Docker /data 快照隔离模式：在每条任务执行前自动恢复容器 /data 到初始状态，"
-            "彻底消除任务间状态污染。此模式下并发数自动降为 1（串行执行）。"
-            "快照/恢复各耗时约 1s，476 条任务总额外开销约 8 分钟。"
+            "Enable Docker /data snapshot isolation mode: automatically restore the container /data to its "
+            "initial state before each task, completely eliminating inter-task state contamination. "
+            "In this mode concurrency is automatically reduced to 1 (serial execution). "
+            "Each snapshot/restore takes ~1 s; total overhead for 476 tasks is ~8 minutes."
         ),
     )
     return p.parse_args()
@@ -93,41 +155,40 @@ def _parse_args():
 def main():
     args = _parse_args()
 
-    # ── 仅转换 JSONL → CSV ────────────────────────────────────────────────────
+    # Resolve output path: explicit > auto-derived from model + input stem
+    output = args.output or _default_output(args.model, args.input)
+
+    # Convert-only: JSONL → intermediate CSV, no agent execution or scoring
     if args.convert_only:
         if not args.input:
-            logger.error("--convert-only 需要配合 --input 使用")
+            logger.error("--convert-only requires --input")
             sys.exit(1)
         tasks = load_tasks_from_jsonl(args.input)
-        if args.num_tasks:
-            tasks = tasks[:args.num_tasks]
-        tasks_to_csv(tasks, args.output)
-        print(f"\n转换完成: {args.output}")
+        tasks = _apply_row_filter(tasks, args)
+        tasks_to_csv(tasks, output)
+        print(f"\nConverted: {output}")
         return
 
-    # ── 从已有 completion CSV 打分 ────────────────────────────────────────────
+    # Score an existing completion CSV (skip agent execution)
     if args.completion_csv:
-        # jsonl_for_gt 优先；其次尝试 --input；都没有则 None
         jsonl_path = args.jsonl_for_gt or args.input or None
         evaluate_from_completion_csv(
             completion_csv_path=args.completion_csv,
-            output_csv_path=args.output,
+            output_csv_path=output,
             pass_threshold=args.pass_threshold,
             jsonl_path=jsonl_path,
             json_output_dir=args.json_output_dir,
         )
         return
 
-    # ── 完整流程：Agent 执行 + GT 生成 + 打分 ────────────────────────────────
+    # Full pipeline: agent execution + GT generation + scoring
     if not args.input:
-        logger.error("请指定 --input 或 --from-completion-csv")
+        logger.error("Specify --input or --from-completion-csv")
         sys.exit(1)
 
     all_tasks = load_tasks_from_jsonl(args.input)
-    if args.num_tasks:
-        all_tasks = all_tasks[:args.num_tasks]
+    all_tasks = _apply_row_filter(all_tasks, args)
 
-    # 提示：dynamic_script 任务将在运行时自动生成 GT，无需预跑
     dynamic_script_tasks = [
         t for t in all_tasks
         if t.hallucination_type in (HallucinationType.MEMORY, HallucinationType.REASONING)
@@ -136,17 +197,20 @@ def main():
     ]
     if dynamic_script_tasks:
         print(
-            f"\n📋 {len(dynamic_script_tasks)} 条 dynamic_script 任务将在 Agent 执行完成后"
-            f" 自动生成 GT 执行日志。\n"
+            f"\n{len(dynamic_script_tasks)} dynamic_script tasks will have GT logs "
+            f"generated automatically after agent execution.\n"
         )
+
+    print(f"\nResults will be saved to: {output}\n")
 
     asyncio.run(run_full_pipeline(
         jsonl_path=args.input,
         model=args.model,
-        output_csv=args.output,
+        output_csv=output,
         server_url=args.server_url,
         concurrency=args.concurrency,
         num_tasks=args.num_tasks,
+        task_indices=args.rows,
         pass_threshold=args.pass_threshold,
         json_output_dir=args.json_output_dir,
         use_docker_snapshot=args.docker_snapshot,

@@ -39,6 +39,4 @@ dev = [
     "black>=24.8.0",
 ]
 
-[tool.uv]
-index-url = "http://pypi.sankuai.com/simple"
-trusted-host = ["pypi.sankuai.com"]
+

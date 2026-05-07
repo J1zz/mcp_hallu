@@ -1,12 +1,12 @@
-"""eval — 幻觉评测子包。
+"""eval — hallucination evaluation sub-package.
 
-模块分工：
-  config.py     路径、环境变量、可选依赖初始化
-  schema.py     HallucinationType、Task、STATEFUL_BUCKETS
-  data_io.py    JSONL/CSV 加载与转换
-  trajectory.py Agent 轨迹解析
-  scoring.py    四种评分策略 + route_and_score 路由器
-  runner.py     评分主循环、报告输出、完整 pipeline
+Module responsibilities:
+  config.py     paths, environment variables, optional dependency initialisation
+  schema.py     HallucinationType, Task, STATEFUL_BUCKETS
+  data_io.py    JSONL/CSV loading and conversion
+  trajectory.py agent trajectory parsing
+  scoring.py    four scoring strategies + route_and_score router
+  runner.py     scoring main loop, report output, full pipeline
 """
 
 from .schema import HallucinationType, Task, STATEFUL_BUCKETS
