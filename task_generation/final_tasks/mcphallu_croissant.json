@@ -1,0 +1,232 @@
+{
+  "@context": {
+    "@language": "en",
+    "@vocab": "https://schema.org/",
+    "sc": "https://schema.org/",
+    "cr": "http://mlcommons.org/croissant/",
+    "rai": "http://mlcommons.org/croissant/RAI/",
+    "dct": "http://purl.org/dc/terms/",
+    "ml": "http://mlcommons.org/schema/"
+  },
+  "@type": "sc:Dataset",
+  "conformsTo": "http://mlcommons.org/croissant/1.1",
+  "name": "MCPHallu",
+  "description": "MCPHallu is a benchmark for diagnosing hallucinations in MCP (Model Context Protocol) agents along three axes: reasoning, execution, and memory. It contains 358 tasks across five capability domains (General, Analytics, Productivity, Financial, Coding) and four hallucination subtypes (Branch Collapse, Unreachable Goal, Tool Misuse, Context Forgetting), evaluated against 36 production MCP servers running in isolated Docker containers.",
+  "url": "https://anonymous.4open.science/r/mcp_hallu",
+  "license": "https://opensource.org/licenses/MIT",
+  "version": "1.0.0",
+  "keywords": [
+    "LLM agents",
+    "hallucination",
+    "benchmark",
+    "MCP",
+    "tool use",
+    "evaluation",
+    "NeurIPS 2026"
+  ],
+  "cr:isLiveDataset": false,
+  "rai:dataCollection": "Tasks were constructed in three stages: (1) tool grounding from live MCP server schemas, (2) adversarial synthesis using Claude Sonnet 4.6 with subtype-specific prompts, and (3) automated filtering plus expert review by three annotators with 2+ years of LLM agent evaluation experience.",
+  "rai:dataCollectionType": "Programmatic/API",
+  "rai:dataUseCases": "Benchmarking and diagnosing hallucination failure modes in LLM-based MCP agents; subtype-level attribution of reasoning, execution, and memory failures.",
+  "rai:dataBiases": "The 36 MCP servers are English-language and primarily target Western SaaS APIs (GitHub, Notion, Slack, etc.). Findings may not generalize to regional services or non-English-language tools.",
+  "rai:personalSensitiveInformation": "No personal or sensitive information. All tasks are synthetic and constructed from public MCP server tool schemas.",
+  "rai:annotationsPerItem": 3,
+  "rai:annotatorDemographics": "Three annotators with backgrounds in LLM agent evaluation (each with 2+ years experience).",
+  "distribution": [
+    {
+      "@type": "cr:FileObject",
+      "@id": "mcphallu_tasks_json",
+      "name": "mcphallu_tasks.json",
+      "description": "All 358 MCPHallu tasks in a single JSON array.",
+      "contentUrl": "https://anonymous.4open.science/r/mcp_hallu/task_generation/final_tasks/mcphallu_tasks.json",
+      "encodingFormat": "application/json",
+      "sha256": "5c5c65c229b908c3230f17734d9a7c9e977fc29671d7ac96f2042844c1feda02"
+    },
+    {
+      "@type": "cr:FileObject",
+      "@id": "confusion_tasks_jsonl",
+      "name": "confusion_tasks.jsonl",
+      "description": "84 Tool Misuse tasks in JSONL format.",
+      "contentUrl": "https://anonymous.4open.science/r/mcp_hallu/task_generation/final_tasks/confusion_tasks.jsonl",
+      "encodingFormat": "application/jsonlines",
+      "sha256": "35cae5bf7e649dab18dc1dd289f534211d1bc83eee4cd23b60ba88aa062ceb69"
+    },
+    {
+      "@type": "cr:FileObject",
+      "@id": "memory_tasks_jsonl",
+      "name": "memory_tasks.jsonl",
+      "description": "82 Context Forgetting tasks in JSONL format.",
+      "contentUrl": "https://anonymous.4open.science/r/mcp_hallu/task_generation/final_tasks/memory_tasks.jsonl",
+      "encodingFormat": "application/jsonlines",
+      "sha256": "bf4832b0f73bba9a2f0193efec488566a127dea9069b3caaf7544d5b66836634"
+    },
+    {
+      "@type": "cr:FileObject",
+      "@id": "reasoning_tasks_jsonl",
+      "name": "reasoning_tasks.jsonl",
+      "description": "89 Branch Collapse tasks in JSONL format.",
+      "contentUrl": "https://anonymous.4open.science/r/mcp_hallu/task_generation/final_tasks/reasoning_tasks.jsonl",
+      "encodingFormat": "application/jsonlines",
+      "sha256": "3c0b7cf7bd0f431ae5fa41e95a47805ef66dc7a727a70ebee090a20344b40a1e"
+    },
+    {
+      "@type": "cr:FileObject",
+      "@id": "void_tasks_jsonl",
+      "name": "void_tasks.jsonl",
+      "description": "103 Unreachable Goal tasks in JSONL format.",
+      "contentUrl": "https://anonymous.4open.science/r/mcp_hallu/task_generation/final_tasks/void_tasks.jsonl",
+      "encodingFormat": "application/jsonlines",
+      "sha256": "694256f9b331cb6369b38b47f0e99ad57aeffd7af5d313f69abb11a0849df8ae"
+    }
+  ],
+  "recordSet": [
+    {
+      "@type": "cr:RecordSet",
+      "@id": "tasks",
+      "name": "tasks",
+      "description": "Each record is one MCPHallu evaluation task.",
+      "source": {
+        "fileObject": {
+          "@id": "mcphallu_tasks_json"
+        }
+      },
+      "field": [
+        {
+          "@type": "cr:Field",
+          "@id": "tasks/task_id",
+          "name": "task_id",
+          "description": "Unique task identifier (e.g. reasoning_001).",
+          "dataType": "sc:Text",
+          "source": {
+            "fileObject": {
+              "@id": "mcphallu_tasks_json"
+            },
+            "extract": {
+              "jsonPath": "$[*].task_id"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "tasks/bucket",
+          "name": "bucket",
+          "description": "Capability domain: GENERAL, ANALYTICS, PRODUCTIVITY, FINANCIAL, or CODING.",
+          "dataType": "sc:Text",
+          "source": {
+            "fileObject": {
+              "@id": "mcphallu_tasks_json"
+            },
+            "extract": {
+              "jsonPath": "$[*].bucket"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "tasks/hallucination_type",
+          "name": "hallucination_type",
+          "description": "Target subtype: Branch Collapse, Unreachable Goal, Tool Misuse, or Context Forgetting.",
+          "dataType": "sc:Text",
+          "source": {
+            "fileObject": {
+              "@id": "mcphallu_tasks_json"
+            },
+            "extract": {
+              "jsonPath": "$[*].hallucination_type"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "tasks/difficulty",
+          "name": "difficulty",
+          "description": "Difficulty level: Easy, Medium, or Hard.",
+          "dataType": "sc:Text",
+          "source": {
+            "fileObject": {
+              "@id": "mcphallu_tasks_json"
+            },
+            "extract": {
+              "jsonPath": "$[*].difficulty"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "tasks/task",
+          "name": "task",
+          "description": "Natural-language instruction given to the MCP agent.",
+          "dataType": "sc:Text",
+          "source": {
+            "fileObject": {
+              "@id": "mcphallu_tasks_json"
+            },
+            "extract": {
+              "jsonPath": "$[*].task"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "tasks/available_tools",
+          "name": "available_tools",
+          "description": "List of MCP tool names available to the agent.",
+          "dataType": "sc:Text",
+          "source": {
+            "fileObject": {
+              "@id": "mcphallu_tasks_json"
+            },
+            "extract": {
+              "jsonPath": "$[*].available_tools"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "tasks/ground_truth",
+          "name": "ground_truth",
+          "description": "Ground truth specification: dynamic_script or state_assertions.",
+          "dataType": "sc:Text",
+          "source": {
+            "fileObject": {
+              "@id": "mcphallu_tasks_json"
+            },
+            "extract": {
+              "jsonPath": "$[*].ground_truth"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "tasks/claims",
+          "name": "claims",
+          "description": "Ordered claim graph encoding the dependency structure of the correct trajectory.",
+          "dataType": "sc:Text",
+          "source": {
+            "fileObject": {
+              "@id": "mcphallu_tasks_json"
+            },
+            "extract": {
+              "jsonPath": "$[*].claims"
+            }
+          }
+        },
+        {
+          "@type": "cr:Field",
+          "@id": "tasks/should_stop_early",
+          "name": "should_stop_early",
+          "description": "Whether correct behavior is to stop early (Unreachable Goal tasks).",
+          "dataType": "sc:Boolean",
+          "source": {
+            "fileObject": {
+              "@id": "mcphallu_tasks_json"
+            },
+            "extract": {
+              "jsonPath": "$[*].should_stop_early"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

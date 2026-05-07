@@ -39,11 +39,13 @@ mcp_hallu/
 ├── LICENSE
 ├── README.md
 ├── task_generation/               # Benchmark tasks, evaluation pipeline, and results
-│   ├── final_tasks/               # ★ Canonical task JSONL files (4 subtypes)
+│   ├── final_tasks/               # ★ Canonical task files (4 subtypes + dataset metadata)
 │   │   ├── confusion_tasks.jsonl
 │   │   ├── memory_tasks.jsonl
 │   │   ├── reasoning_tasks.jsonl
-│   │   └── void_tasks.jsonl
+│   │   ├── void_tasks.jsonl
+│   │   ├── mcphallu_tasks.json    # All tasks merged into a single JSON array
+│   │   └── mcphallu_croissant.json  # Croissant metadata (ML dataset standard)
 │   ├── eval/                      # Scoring modules
 │   │   ├── scoring.py             # All four scoring strategies + LLM-judge wrappers
 │   │   ├── runner.py              # Async evaluation runner
