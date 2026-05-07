@@ -30,6 +30,42 @@
   "rai:dataUseCases": "Benchmarking and diagnosing hallucination failure modes in LLM-based MCP agents; subtype-level attribution of reasoning, execution, and memory failures.",
   "rai:dataBiases": "The 36 MCP servers are English-language and primarily target Western SaaS APIs (GitHub, Notion, Slack, etc.). Findings may not generalize to regional services or non-English-language tools.",
   "rai:personalSensitiveInformation": "No personal or sensitive information. All tasks are synthetic and constructed from public MCP server tool schemas.",
+  "rai:dataLimitations": "MCPHallu covers 36 English-language MCP servers from five capability domains; generalisation to non-English, regional, or enterprise-internal tool sets is not validated. The benchmark targets agentic hallucination specifically and is not designed for assessing raw language understanding, knowledge retrieval, or single-turn QA. Model scores reflect behaviour in an isolated Docker environment and may differ under production deployments with real user data, rate-limited APIs, or multi-user concurrency. This dataset is not recommended as a sole safety evaluation for deployment decisions.",
+  "rai:dataSocialImpact": "Positive impacts: MCPHallu enables systematic identification of failure modes in MCP agents, helping developers detect and mitigate hallucinations before deployment, which can improve reliability and user trust in AI-assisted workflows. Negative impacts / risks: Publishing detailed adversarial task patterns could be misused to craft inputs that intentionally trigger agent failures. To mitigate this risk, task prompts are framed as diagnostic stimuli rather than jailbreak instructions, and the repository is released under a permissive open-source licence that requires attribution. No specific demographic group is disproportionately harmed by dataset misuse.",
+  "dct:source": [
+    {
+      "@type": "dct:Dataset",
+      "name": "MCP Server Tool Schemas",
+      "description": "Tool name and parameter schemas scraped from 36 production MCP servers (GitHub, Notion, Slack, Airtable, etc.) via the MCP list-tools API.",
+      "url": "https://github.com/modelcontextprotocol/servers"
+    }
+  ],
+  "cr:provenanceActivities": [
+    {
+      "@type": "cr:Activity",
+      "name": "Tool Schema Collection",
+      "description": "Tool names, parameter definitions, and descriptions were collected programmatically from 36 live MCP servers using the MCP list-tools API endpoint. Servers were selected to cover five capability domains: General, Analytics, Productivity, Financial, and Coding.",
+      "activityType": "Collection"
+    },
+    {
+      "@type": "cr:Activity",
+      "name": "Adversarial Task Synthesis",
+      "description": "Tasks were synthesised by prompting Claude Sonnet 4.6 with subtype-specific adversarial prompt templates. Each subtype (Branch Collapse, Unreachable Goal, Tool Misuse, Context Forgetting) had a dedicated prompt that instilled the corresponding hallucination-inducing structure. Raw LLM outputs were parsed into structured JSON.",
+      "activityType": "Annotation"
+    },
+    {
+      "@type": "cr:Activity",
+      "name": "Automated Filtering",
+      "description": "Generated tasks were automatically filtered to remove duplicates, malformed JSON, and tasks that violated length or tool-coverage constraints. Tasks without at least one valid MCP tool call in the ground truth were discarded.",
+      "activityType": "Preprocessing"
+    },
+    {
+      "@type": "cr:Activity",
+      "name": "Expert Review",
+      "description": "Three annotators with 2+ years of LLM agent evaluation experience reviewed each task for correctness of ground truth, clarity of instruction, and alignment with the target hallucination subtype. Disagreements were resolved by majority vote.",
+      "activityType": "Annotation"
+    }
+  ],
   "rai:annotationsPerItem": 3,
   "rai:annotatorDemographics": "Three annotators with backgrounds in LLM agent evaluation (each with 2+ years experience).",
   "distribution": [
