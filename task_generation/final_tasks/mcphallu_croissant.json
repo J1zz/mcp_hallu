@@ -11,7 +11,7 @@
   "@type": "sc:Dataset",
   "conformsTo": "http://mlcommons.org/croissant/1.1",
   "name": "MCPHallu",
-  "description": "MCPHallu is a benchmark for diagnosing hallucinations in MCP (Model Context Protocol) agents along three axes: reasoning, execution, and memory. It contains 358 tasks across five capability domains (General, Analytics, Productivity, Financial, Coding) and four hallucination subtypes (Branch Collapse, Unreachable Goal, Tool Misuse, Context Forgetting), evaluated against 36 production MCP servers running in isolated Docker containers.",
+  "description": "MCPHallu is a benchmark for diagnosing hallucinations in MCP (Model Context Protocol) agents along three axes: reasoning, execution, and memory. It contains 358 tasks and 5,830 agent trajectories across five capability domains (General, Analytics, Productivity, Financial, Coding) and four hallucination subtypes (Branch Collapse, Unreachable Goal, Tool Misuse, Context Forgetting), evaluated against 36 production MCP servers running in isolated Docker containers.",
   "url": "https://anonymous.4open.science/r/mcp_hallu",
   "license": "https://opensource.org/licenses/MIT",
   "version": "1.0.0",
@@ -146,7 +146,7 @@
           "@type": "cr:Field",
           "@id": "tasks/bucket",
           "name": "bucket",
-          "description": "Capability domain: GENERAL, ANALYTICS, PRODUCTIVITY, FINANCIAL, or CODING.",
+          "description": "Capability domain: GENERAL, ANALYTICS, PRODUCTIVITY, FINANCIAL, or CODING. (Legacy label BASIC corresponds to GENERAL.)",
           "dataType": "sc:Text",
           "source": {
             "fileObject": {
