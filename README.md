@@ -23,10 +23,10 @@ MCPHallu is a benchmark for diagnosing hallucinations in LLM agents operating un
 
 ### Key Statistics
 
-- **358 tasks** and **5,830 agent trajectories** across 5 capability domains (ANALYTICS, GENERAL, CODING, FINANCIAL, PRODUCTIVITY)
+- **358 tasks** and **5,012 agent trajectories** across 5 capability domains (ANALYTICS, GENERAL, CODING, FINANCIAL, PRODUCTIVITY)
 - **3 difficulty levels**: Easy, Medium, Hard
 - **36 production MCP servers** running in isolated Docker containers, covering 302 tools
-- **14 frontier LLM agents** from 8 vendors evaluated on **5,014 trajectories**
+- **14 frontier LLM agents** from 8 vendors evaluated on **5,012 trajectories**
 - Average score: **0.642**; Unreachable Goal (Void Trap) average: **0.458**
 
 ---
